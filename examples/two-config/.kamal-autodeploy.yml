@@ -1,0 +1,102 @@
+# kamal-autodeploy configuration: the reviewed plan for merge-to-main deploys.
+# Edit it freely, then run `kamal-autodeploy init` to regenerate the workflow.
+# Docs: https://github.com/Upstate-run/kamal-autodeploy#configuration
+version: 1
+branch: main
+tool_version: v0.1.0
+ci:
+    - name: CI
+      path: .github/workflows/ci.yml
+    - name: Edge
+      path: .github/workflows/edge.yml
+unclassified: deploy
+ignore:
+    - docs/**
+    - '*.md'
+    - LICENSE
+    - LICENSE.*
+    - .github/ISSUE_TEMPLATE/**
+    - .github/PULL_REQUEST_TEMPLATE*
+shared:
+    - paths:
+        - .kamal/hooks/**
+        - bin/kamal
+      units:
+        - rails
+        - edge
+units:
+    - id: rails
+      environment: production-rails
+      command: bin/kamal-rails
+      config: config/deploy.rails.yml
+      service: fixture_rails
+      requires:
+        - CI
+      lock: host-203-0-113-10
+      paths:
+        - '**'
+        - '!.git'
+        - '!.git/**'
+        - '!.github'
+        - '!.github/**'
+        - '!config/deploy*.yml'
+        - '!config/deploy*.yml/**'
+        - '!.kamal'
+        - '!.kamal/**'
+        - '!docs'
+        - '!docs/**'
+        - .dockerignore
+        - config/deploy.rails.yml
+        - bin/kamal-rails
+        - Dockerfile
+        - .kamal/secrets.rails
+        - .kamal/secrets.rails.example
+        - '!config/deploy.edge.yml'
+        - '!bin/kamal-edge'
+        - '!.kamal/secrets.edge'
+        - '!.kamal/secrets.edge.example'
+      secrets_file: .kamal/secrets.rails
+      write_secrets_file: true
+      secrets:
+        - FIXTURE_RAILS_SECRET
+      registry_password: github_token
+      kamal: gem
+      kamal_version: 2.12.0
+      ssh:
+        user: root
+        port: 22
+        hosts:
+            - 203.0.113.10
+    - id: edge
+      environment: production-edge
+      command: bin/kamal-edge
+      config: config/deploy.edge.yml
+      service: fixture_edge
+      requires:
+        - CI
+        - Edge
+      after:
+        - rails
+      lock: host-203-0-113-10
+      paths:
+        - services/edge/**
+        - '!services/edge/.git'
+        - '!services/edge/.git/**'
+        - services/edge/.dockerignore
+        - config/deploy.edge.yml
+        - bin/kamal-edge
+        - services/edge/Dockerfile
+        - .kamal/secrets.edge
+        - .kamal/secrets.edge.example
+      secrets_file: .kamal/secrets.edge
+      write_secrets_file: true
+      secrets:
+        - FIXTURE_EDGE_SECRET
+      registry_password: github_token
+      kamal: gem
+      kamal_version: 2.12.0
+      ssh:
+        user: root
+        port: 22
+        hosts:
+            - 203.0.113.10

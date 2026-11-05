@@ -1,0 +1,23 @@
+name: Edge
+
+# Path-filtered like the example application's "Phoenix edge": it runs when edge files, the shared schema or
+# deploy setup change. A required workflow must run for every commit that can deploy edge.
+on:
+  pull_request:
+    paths: ["services/edge/**", "config/deploy.edge.yml", "bin/kamal-edge", "db/**", ".kamal/**", ".kamal-autodeploy.yml", ".github/workflows/edge.yml", ".github/workflows/kamal-autodeploy.yml"]
+  push:
+    branches: [main]
+    paths: ["services/edge/**", "config/deploy.edge.yml", "bin/kamal-edge", "db/**", ".kamal/**", ".kamal-autodeploy.yml", ".github/workflows/edge.yml", ".github/workflows/kamal-autodeploy.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Edge checks
+        run: test -f services/edge/Dockerfile && test -f services/edge/public/index.html

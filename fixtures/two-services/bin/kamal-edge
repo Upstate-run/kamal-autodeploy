@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Kamal for the fixture's edge service, pinned to config/deploy.edge.yml.
+# Like the example application's wrappers: -c goes AFTER the command (Kamal ignores it before), and these
+# standalone configs are not Kamal destinations.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec kamal "$@" -c "$root/config/deploy.edge.yml"

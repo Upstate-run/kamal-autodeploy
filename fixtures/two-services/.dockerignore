@@ -1,0 +1,5 @@
+/.git/
+/.github
+/config/deploy*.yml
+/.kamal
+/docs

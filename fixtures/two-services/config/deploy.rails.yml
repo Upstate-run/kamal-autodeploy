@@ -1,0 +1,48 @@
+# Kamal configuration for the "rails" service of the kamal-autodeploy acceptance fixture.
+# It mirrors the example application's topology with tiny nginx images: two standalone Kamal configs
+# (no config/deploy.yml), each with its own wrapper script, sharing one host and one
+# kamal-proxy. Usage: bin/kamal-rails <command>
+
+minimum_version: 2.12.0
+
+service: fixture_rails
+
+# A separate image repository from edge: both build from the same commit SHA.
+image: acme/two-services-rails
+
+secrets_path: .kamal/secrets.rails
+
+servers:
+  web:
+    hosts:
+      - 203.0.113.10
+
+proxy:
+  host: rails.203.0.113.10.sslip.io
+  ssl: false
+  app_port: 80
+  healthcheck:
+    path: /up
+  run:
+    # Host-level settings of the single shared kamal-proxy. deploy.rails.yml and
+    # deploy.edge.yml must declare identical values or a deploy reboots the shared proxy.
+    http_port: 80
+    https_port: 443
+
+registry:
+  server: ghcr.io
+  username: acme
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+
+env:
+  clear:
+    FIXTURE_UNIT: rails
+  secret:
+    - FIXTURE_RAILS_SECRET
+
+deploy_timeout: 60
+retain_containers: 3

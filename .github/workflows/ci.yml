@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          go test -race ./...
+
+  actionlint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint 1.7.12 (checksum-pinned)
+        env:
+          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive=actionlint_1.7.12_linux_amd64.tar.gz
+          curl --fail --silent --show-error --location --proto '=https' -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/$archive"
+          echo "$SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+      - name: Lint this repository's workflows and the generated example workflows
+        run: |
+          "$RUNNER_TEMP/actionlint" -color .github/workflows/*.yml \
+            examples/simple/kamal-autodeploy.yml examples/two-config/kamal-autodeploy.yml \
+            fixtures/two-services/.github/workflows/*.yml

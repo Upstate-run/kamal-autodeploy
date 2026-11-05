@@ -1,0 +1,26 @@
+# Release configuration (not run yet; nothing is published from this PR).
+# A release: tag vX.Y.Z on main, then `goreleaser release --clean` from a clean checkout.
+version: 2
+project_name: kamal-autodeploy
+builds:
+  - id: kamal-autodeploy
+    main: ./cmd/kamal-autodeploy
+    binary: kamal-autodeploy
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/Upstate-run/kamal-autodeploy/internal/cli.Version={{ .Tag }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md]
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+release:
+  draft: true
+changelog:
+  disable: true

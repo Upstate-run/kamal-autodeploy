@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby
+# Bundler binstub (abbreviated for the example).
+require "rubygems"
+require "bundler/setup"
+load Gem.bin_path("kamal", "kamal")

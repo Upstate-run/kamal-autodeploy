@@ -1,0 +1,43 @@
+# kamal-autodeploy configuration: the reviewed plan for merge-to-main deploys.
+# Edit it freely, then run `kamal-autodeploy init` to regenerate the workflow.
+# Docs: https://github.com/Upstate-run/kamal-autodeploy#configuration
+version: 1
+branch: main
+tool_version: v0.1.0
+ci:
+    - name: CI
+      path: .github/workflows/ci.yml
+unclassified: deploy
+ignore:
+    - docs/**
+    - '*.md'
+    - LICENSE
+    - LICENSE.*
+    - .github/ISSUE_TEMPLATE/**
+    - .github/PULL_REQUEST_TEMPLATE*
+units:
+    - id: shop
+      environment: production
+      command: bin/kamal
+      config: config/deploy.yml
+      service: shop
+      requires:
+        - CI
+      lock: host-198-51-100-20
+      paths:
+        - '**'
+        - config/deploy.yml
+        - Dockerfile
+        - .kamal/secrets
+        - .kamal/secrets.example
+      secrets_file: .kamal/secrets
+      write_secrets_file: false
+      secrets:
+        - RAILS_MASTER_KEY
+      registry_password: github_token
+      kamal: bundler
+      ssh:
+        user: root
+        port: 22
+        hosts:
+            - 198.51.100.20

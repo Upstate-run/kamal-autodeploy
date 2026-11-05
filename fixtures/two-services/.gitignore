@@ -1,0 +1,4 @@
+.kamal/secrets
+.kamal/secrets.*
+!.kamal/secrets.*.example
+.env*

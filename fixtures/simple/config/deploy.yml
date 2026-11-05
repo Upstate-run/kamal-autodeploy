@@ -1,0 +1,28 @@
+# A conventional single-config Rails app (the generator's first customer).
+service: shop
+image: acme/shop
+
+servers:
+  web:
+    - 198.51.100.20
+  job:
+    hosts:
+      - 198.51.100.20
+    cmd: bin/jobs
+
+proxy:
+  ssl: true
+  host: shop.example.com
+
+registry:
+  server: ghcr.io
+  username: acme
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+env:
+  secret:
+    - RAILS_MASTER_KEY
+
+builder:
+  arch: amd64

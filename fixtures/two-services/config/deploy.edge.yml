@@ -1,0 +1,45 @@
+# Kamal configuration for the "edge" service of the kamal-autodeploy acceptance fixture.
+# Shares the host and kamal-proxy with config/deploy.rails.yml. Usage: bin/kamal-edge <command>
+
+minimum_version: 2.12.0
+
+service: fixture_edge
+
+image: acme/two-services-edge
+
+secrets_path: .kamal/secrets.edge
+
+servers:
+  web:
+    - 203.0.113.10
+
+proxy:
+  host: edge.203.0.113.10.sslip.io
+  ssl: false
+  app_port: 80
+  healthcheck:
+    path: /up
+  run:
+    # Must stay identical to config/deploy.rails.yml (shared kamal-proxy).
+    http_port: 80
+    https_port: 443
+
+registry:
+  server: ghcr.io
+  username: acme
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+  context: services/edge
+  dockerfile: services/edge/Dockerfile
+
+env:
+  clear:
+    FIXTURE_UNIT: edge
+  secret:
+    - FIXTURE_EDGE_SECRET
+
+deploy_timeout: 60
+retain_containers: 3
