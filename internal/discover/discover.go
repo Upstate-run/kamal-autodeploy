@@ -30,18 +30,27 @@ type Note struct {
 
 // UnitInfo is discovery detail the plan prints but the config does not store.
 type UnitInfo struct {
-	ID              string
-	Base, Overlay   string
-	Context         string
-	Wrapper         string
-	PrivateHosts    []string
-	HostsUnknown    bool
-	EndpointUnknown bool
-	AccessorySecret []string
-	SecretLines     []SecretLine // from a tracked secrets file
-	SecretsTracked  bool
-	UpstateEnv      string
-	UpstateOrigin   string
+	ID                    string
+	Image                 string
+	Dynamic               bool
+	Destination           string
+	Base, Overlay         string
+	Context               string
+	Wrapper               string
+	PrivateHosts          []string
+	HostsUnknown          bool
+	EndpointUnknown       bool
+	SSHUserUnknown        bool
+	AccessorySecret       []string
+	SecretLines           []SecretLine // from a tracked secrets file
+	SecretsFile           string
+	RegistryServer        string
+	RegistryServerUnknown bool
+	SecretsPathUnknown    bool
+	SecretIssues          []Note
+	SecretsTracked        bool
+	UpstateEnv            string
+	UpstateOrigin         string
 }
 
 type Report struct {
@@ -140,7 +149,7 @@ func Discover(root string, opts Options) (*Report, error) {
 	var units []config.Unit
 	var infos []UnitInfo
 	for _, kc := range kcs {
-		info := UnitInfo{Base: kc.Base, Overlay: kc.Overlay}
+		info := UnitInfo{Base: kc.Base, Overlay: kc.Overlay, Destination: kc.Destination, Dynamic: kc.Dynamic, Image: str(kc.Merged["image"])}
 		cfgPath := kc.Base
 		if kc.Overlay != "" {
 			cfgPath = kc.Overlay
@@ -241,6 +250,7 @@ func Discover(root string, opts Options) (*Report, error) {
 		if user := str(ssh["user"]); user != "" {
 			u.SSH.User = user
 		} else if ssh["user"] != nil {
+			info.SSHUserUnknown = true
 			r.Notes = append(r.Notes, Note{Level: Unknown, Unit: id, Text: "ssh.user is templated; set ssh.user"})
 		}
 		if value, exists := ssh["port"]; exists {
@@ -290,6 +300,7 @@ func Discover(root string, opts Options) (*Report, error) {
 
 		// Secrets.
 		secretsFile := str(kc.Merged["secrets_path"])
+		info.SecretsPathUnknown = kc.Merged["secrets_path"] != nil && secretsFile == ""
 		if kc.Merged["secrets_path"] != nil && secretsFile == "" {
 			r.Notes = append(r.Notes, Note{Level: Unknown, Unit: id, Text: "secrets_path is templated; set secrets_file"})
 		}
@@ -300,23 +311,29 @@ func Discover(root string, opts Options) (*Report, error) {
 			}
 		}
 		u.SecretsFile = secretsFile
+		info.SecretsFile = secretsFile
 		own = append(own, secretsFile, secretsFile+".example")
 		for _, p := range own {
 			if config.ValidPattern(p) == nil {
 				u.Paths = append(u.Paths, p)
 			}
 		}
+		secretNote := func(level, text string) {
+			n := Note{Level: level, Unit: id, Text: text}
+			r.Notes = append(r.Notes, n)
+			info.SecretIssues = append(info.SecretIssues, n)
+		}
 		deploySecrets, accessorySecrets, unknownSecrets := kc.secretNames()
 		info.AccessorySecret = accessorySecrets
 		if unknownSecrets {
-			r.Notes = append(r.Notes, Note{Level: Unknown, Unit: id, Text: "some secret names are templated; add them to secrets"})
+			secretNote(Unknown, "some secret names are templated; add them to secrets")
 		}
 		names := deploySecrets
 		for _, candidate := range []string{secretsFile + ".example", secretsFile} {
 			if !tracked(candidate) && candidate == secretsFile && !ignored(candidate) {
 				continue // an untracked file that is not ignored is not read at all
 			}
-			lines, err := readSecretNames(filepath.Join(root, candidate))
+			lines, err := ReadSecretNames(filepath.Join(root, candidate))
 			if err != nil {
 				continue
 			}
@@ -326,7 +343,7 @@ func Discover(root string, opts Options) (*Report, error) {
 		}
 		if tracked(secretsFile) {
 			info.SecretsTracked = true
-			lines, _ := readSecretNames(filepath.Join(root, secretsFile))
+			lines, _ := ReadSecretNames(filepath.Join(root, secretsFile))
 			info.SecretLines = lines
 			for _, l := range lines {
 				switch l.Kind {
@@ -349,6 +366,11 @@ func Discover(root string, opts Options) (*Report, error) {
 		// Registry.
 		registry := mapping(kc.Merged["registry"])
 		server, user := strings.ToLower(str(registry["server"])), str(registry["username"])
+		info.RegistryServer = server
+		info.RegistryServerUnknown = registry["server"] != nil && server == ""
+		if server == "" && !info.RegistryServerUnknown {
+			info.RegistryServer = "docker.io"
+		}
 		switch {
 		case server == "" && registry["server"] == nil && len(registry) == 0:
 			u.RegistryPassword = config.RegistrySecret
@@ -367,11 +389,11 @@ func Discover(root string, opts Options) (*Report, error) {
 				continue
 			}
 			if config.ReservedName(n) {
-				r.Notes = append(r.Notes, Note{Level: Unsupported, Unit: id, Text: "secret " + n + " has a name the deploy workflow uses itself; rename it in the Kamal config"})
+				secretNote(Unsupported, "secret "+n+" has a name the deploy workflow uses itself; rename it in the Kamal config")
 				continue
 			}
 			if !config.ValidSecretName(n) || strings.HasPrefix(n, "GITHUB_") {
-				r.Notes = append(r.Notes, Note{Level: Unknown, Unit: id, Text: "secret " + n + " is not a valid GitHub secret name; rename it or provide it another way"})
+				secretNote(Unknown, "secret "+n+" is not a valid GitHub secret name; rename it or provide it another way")
 				continue
 			}
 			kept = append(kept, n)

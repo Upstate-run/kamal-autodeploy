@@ -14,6 +14,7 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 ## Contents
 
 - [Install](#install)
+- [Readiness and onboarding output](#readiness-and-onboarding-output)
 - [Quick start](#quick-start)
 - [How a deploy is chosen](#how-a-deploy-is-chosen)
 - [Configuration](#configuration)
@@ -28,17 +29,37 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 ## Install
 
 ```sh
-go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.4
+go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.5
 ```
 
 Published releases also provide macOS/Linux binary archives and `checksums.txt`; use those when Go is not installed locally and verify the archive checksum before use. Go installs use the module proxy and checksum database. The generated workflow pins the reviewed tool version. See [the release configuration](.goreleaser.yaml).
+
+## Readiness and onboarding output
+
+Before preparing a new repository, run:
+
+```sh
+kamal-autodeploy ready --direct-kamal
+# Local assessment only, without GitHub requests:
+kamal-autodeploy ready --offline --direct-kamal
+```
+
+`ready` reuses static discovery to list CI gates, Kamal runtime, required secret names and deployment units. It checks effective wrapper commands/arguments, rejects empty SSH target lists, and checks that current Kamal hosts/ports and SSH user match the reviewed SSH settings without rewriting that plan. It rejects duplicate CI gate names, newly discovered secret names missing from the reviewed plan, and secrets-file tracking/ignore mismatches shared with doctor. It flags unresolved SSH targets, flags tracked secret commands (including `.kamal/secrets-common`), and identifies hooks and ERB whose local-file/environment dependencies need review. It never executes project code, secret commands, ERB or SSH, writes files, installs software, changes GitHub settings or dispatches workflows. Secret expressions and values are not printed. It prepares no app-specific edits: review those explicitly before using `init`.
+
+With GitHub access it reuses doctor's checks for environment protections, secret presence and host pins. Missing **or inaccessible** environments are reported without assuming which caused the failure. GHCR metadata can establish package linkage, but does not prove the workflow's write permission. Output links to package settings and asks you to verify **Manage Actions access**; inherited permissions may already suffice. Add repository access only if missing. A failed metadata lookup never establishes that permission is absent.
+
+Before `init`, `--branch` and `--direct-kamal` assess the proposed configuration. Once `.kamal-autodeploy.yml` exists, `ready` uses that reviewed configuration and refuses discovery overrides; use `doctor` for generated-workflow consistency. Exit status is nonzero for failed repository or GitHub setup checks, including setup not yet provisioned. Warnings/unknowns do not fail the command, but are not verified successes. For a new repository with missing GitHub setup, the next action is still to prepare/review the manual workflow before provisioning it. Offline checks cannot establish GitHub or runtime readiness.
+
+Human-facing commands separate results and a **NEXT** action with blank lines. Green means verified, yellow marks warnings/unknowns/actions, and red marks failure. Labels remain readable without color. ANSI color is emitted only to a terminal, disabled by `TERM=dumb` or `NO_COLOR` (including an empty value), and never added to workflow machine output. A local doctor result does not prove runner SSH authorization; remote doctor dispatch does not prove its run succeeded. Failed local setup checks prevent remote dispatch.
 
 ## Quick start
 
 From the root of a Kamal project with a GitHub `origin`:
 
 ```sh
-kamal-autodeploy plan --direct-kamal  # discovery + diff; writes nothing
+kamal-autodeploy ready --direct-kamal # assess readiness; writes nothing
+# Missing GitHub setup is expected on a new repo; follow the printed NEXT action.
+kamal-autodeploy plan --direct-kamal  # detailed discovery + diff; writes nothing
 kamal-autodeploy init --direct-kamal  # new configs default to activation: manual
 git add .kamal-autodeploy.yml .github/workflows/kamal-autodeploy.yml
 git commit -m "Prepare manual Kamal deployment"

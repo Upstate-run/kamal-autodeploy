@@ -265,7 +265,7 @@ func TestDoctorReportsMissingSetup(t *testing.T) {
 	if err == nil {
 		t.Fatalf("doctor must fail without environments:\n%s", out)
 	}
-	if !strings.Contains(out.String(), "GitHub environment production-rails does not exist") {
+	if !strings.Contains(out.String(), "GitHub environment production-rails is missing or inaccessible") {
 		t.Errorf("%s", out)
 	}
 	// --remote dispatches only with confirmation, through gh workflow run with JSON inputs.

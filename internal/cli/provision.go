@@ -78,12 +78,18 @@ func provisionCommand(e *Env, args []string) error {
 		units = []config.Unit{u}
 	}
 	for _, u := range units {
-		fmt.Fprintf(e.Out, "\n== %s (environment %s)\n", u.ID, u.Environment)
+		e.heading(fmt.Sprintf("%s — environment %s", u.ID, u.Environment))
 		if err := p.unit(u); err != nil {
 			return fmt.Errorf("%s: %w", u.ID, err)
 		}
 	}
-	fmt.Fprintln(e.Out, "\nGitHub provisioning finished. Server login authorization is NOT verified. Install the printed CI public key on each host, then run kamal-autodeploy doctor and kamal-autodeploy doctor --remote --unit <id> before enabling automatic deploys. The remote check needs the workflow on the default branch.")
+	e.heading("PROVISIONING FINISHED")
+	fmt.Fprintln(e.Out, "GitHub provisioning finished. Server login authorization is NOT verified. Some prompts may have been declined; doctor checks what is present.")
+	e.next("Authorize the CI key, then verify access", "Install the printed CI public key on each host. If an existing GitHub key was kept, its matching public key must already be authorized. Publish the manual workflow on the default branch, then run:\n  kamal-autodeploy doctor")
+	for _, u := range units {
+		fmt.Fprintf(e.Out, "  kamal-autodeploy doctor --remote --unit %s\n", u.ID)
+	}
+	fmt.Fprintln(e.Out, "\nWait for remote doctor to succeed before a manual deployment. Enable automatic deploys only after verifying that deployment.")
 	return nil
 }
 
@@ -266,6 +272,7 @@ func (p *provisioner) sshKey(u config.Unit, secrets map[string]bool) error {
 	}
 	pub := strings.TrimSpace(string(public))
 	fmt.Fprintf(p.e.Out, "  stored %s. The private key is deleted locally now.\n", generate.SSHKeySecret)
+	p.e.heading("ACTION REQUIRED — authorize the CI public key")
 	fmt.Fprintf(p.e.Out, "  REQUIRED SERVER STEP: authorize this CI public key for the configured SSH user on every host. The server fingerprint does NOT authorize CI login. This tool never SSHes for you:\n    %s\n", pub)
 	for _, h := range u.SSH.Hosts {
 		fmt.Fprintf(p.e.Out, "    echo %s | ssh -o StrictHostKeyChecking=yes -p %d %s@%s 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && cat >> ~/.ssh/authorized_keys'\n", shellQuote(pub), u.SSH.Port, u.SSH.User, h)

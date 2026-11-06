@@ -159,8 +159,8 @@ type SecretLine struct {
 	Kind string // literal, env (exactly $NAME or ${NAME}), command ($(...)), interpolated
 }
 
-// readSecretNames parses a dotenv-style file for names and value kinds only.
-func readSecretNames(path string) ([]SecretLine, error) {
+// ReadSecretNames parses a dotenv-style file for names and value kinds only.
+func ReadSecretNames(path string) ([]SecretLine, error) {
 	raw, err := readFile(path)
 	if err != nil {
 		return nil, err

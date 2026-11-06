@@ -88,15 +88,7 @@ func doctorCommand(e *Env, args []string) error {
 				add("fail", "%s: command %s is not an executable file", u.ID, u.Command)
 			}
 		}
-		tracked := g.Tracked(u.SecretsFile)
-		switch {
-		case u.WriteSecretsFile && tracked:
-			add("fail", "%s: %s is tracked but the workflow would write it; set write_secrets_file: false", u.ID, u.SecretsFile)
-		case u.WriteSecretsFile && !g.Ignored(u.SecretsFile):
-			add("fail", "%s: %s is not ignored by git; add it to .gitignore before CI writes it", u.ID, u.SecretsFile)
-		case !u.WriteSecretsFile && !tracked:
-			add("fail", "%s: %s is not tracked, so CI has no secrets file; set write_secrets_file: true", u.ID, u.SecretsFile)
-		}
+		secretFileChecks(root, u, add)
 		if upstateHooks && cfg.Upstate != nil {
 			if out, err := e.Runner.Run(nil, "git", "-C", root, "ls-files", ".upstate"); err != nil || len(strings.TrimSpace(string(out))) == 0 {
 				add("warn", "%s: Upstate hooks are installed but .upstate/ is not committed; CI hooks cannot find the mapping", u.ID)
@@ -107,7 +99,53 @@ func doctorCommand(e *Env, args []string) error {
 		add("ok", "Upstate hooks are installed; CI deploys report nothing to Upstate until you opt in (init --upstate-cli, provision)")
 	}
 
-	// GitHub, through the user's gh.
+	owner, name := repoSlug(root)
+	repo := owner + "/" + name
+	ghOK := githubChecks(e, cfg, root, add)
+	e.heading("SETUP CHECKS")
+	failed := e.checks(checks)
+	if *remote {
+		if failed {
+			e.next("Fix the failed checks", "Rerun kamal-autodeploy doctor before dispatching a remote check.")
+			return errors.New("doctor found problems (fail lines above)")
+		}
+		if !ghOK {
+			return errors.New("--remote needs gh signed in and a github.com origin")
+		}
+		u, ok := cfg.Unit(*unitFlag)
+		if !ok {
+			return errors.New("--remote needs --unit with a unit ID")
+		}
+		fmt.Fprintf(e.Out, "\nThis dispatches %s on %s (action=doctor, unit=%s): a GitHub-hosted runner loads the CI key and pinned host keys from %s and runs `ssh %s@<host> true`. It deploys nothing and records no deployment.\n", config.WorkflowName, repo, u.ID, u.Environment, u.SSH.User)
+		ok, err := confirm(e, "Dispatch it?", *yes)
+		if err != nil || !ok {
+			return err
+		}
+		inputs, _ := json.Marshal(map[string]string{"action": "doctor", "unit": u.ID})
+		out, err := e.Runner.Run(strings.NewReader(string(inputs)), "gh", "workflow", "run", filepath.Base(config.WorkflowPath), "--repo", repo, "--ref", cfg.Branch, "--json")
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(e.Out, string(out))
+		fmt.Fprintf(e.Out, "Follow it with: gh run list --workflow %s --repo %s --limit 1\n", filepath.Base(config.WorkflowPath), repo)
+	}
+	if failed {
+		e.next("Fix the failed checks", "Rerun kamal-autodeploy doctor after correcting the failures above.")
+		return errors.New("doctor found problems (fail lines above)")
+	}
+	if !*remote {
+		e.next("Verify runner login", "Local checks do not prove SSH authorization. Publish the workflow on the default branch, authorize the CI public key, then run:")
+		for _, u := range cfg.Units {
+			fmt.Fprintf(e.Out, "  kamal-autodeploy doctor --remote --unit %s\n", u.ID)
+		}
+	} else {
+		e.next("Wait for the remote doctor run", "A dispatch is not a successful SSH check. Verify the returned GitHub run succeeds before a manual deploy.")
+	}
+	return nil
+}
+
+// githubChecks reads metadata only; it never reads secret values or dispatches jobs.
+func githubChecks(e *Env, cfg *config.Config, root string, add func(string, string, ...any)) bool {
 	owner, name := repoSlug(root)
 	repo := owner + "/" + name
 	ghOK := owner != "" && e.Runner.LookPath("gh") == nil
@@ -126,11 +164,13 @@ func doctorCommand(e *Env, args []string) error {
 			} else {
 				add("ok", "default branch is %s", b)
 			}
+		} else {
+			add("unknown", "cannot read the default branch; check GitHub access")
 		}
 		p := &provisioner{e: e, repo: repo, cfg: cfg}
 		for _, u := range cfg.Units {
 			if _, err := e.Runner.Run(nil, "gh", "api", "repos/"+repo+"/environments/"+u.Environment, "--silent"); err != nil {
-				add("fail", "%s: GitHub environment %s does not exist; run kamal-autodeploy provision", u.ID, u.Environment)
+				add("fail", "%s: GitHub environment %s is missing or inaccessible; check GitHub access and run kamal-autodeploy provision", u.ID, u.Environment)
 				continue
 			}
 			if err := p.checkEnvironment(u.Environment); err != nil {
@@ -165,7 +205,7 @@ func doctorCommand(e *Env, args []string) error {
 				if len(unpinned) > 0 {
 					add("fail", "%s: host keys not pinned for %s", u.ID, strings.Join(unpinned, ", "))
 				} else {
-					add("ok", "%s: host keys pinned for every host", u.ID)
+					add("ok", "%s: host keys pinned for every host (server identity only; runner login unverified)", u.ID)
 				}
 				if cfg.Upstate != nil {
 					if vars[generate.UpstateEnvVar] != "" && secrets[generate.UpstateToken] {
@@ -174,39 +214,24 @@ func doctorCommand(e *Env, args []string) error {
 						add("ok", "%s: Upstate not configured for this unit (optional)", u.ID)
 					}
 				}
+			} else {
+				add("unknown", "%s: cannot read environment variables; host pins and receipt configuration unverified", u.ID)
 			}
 		}
 	}
-	failed := false
-	for _, c := range checks {
-		fmt.Fprintf(e.Out, "%-5s %s\n", c.level, c.text)
-		if c.level == "fail" {
-			failed = true
-		}
+	return ghOK
+}
+
+// secretFileChecks shares the fresh-runner file contract with readiness.
+func secretFileChecks(root string, u config.Unit, add func(string, string, ...any)) {
+	g := gitx.Git{Dir: root}
+	tracked := g.Tracked(u.SecretsFile)
+	switch {
+	case u.WriteSecretsFile && tracked:
+		add("fail", "%s: %s is tracked but the workflow would write it; set write_secrets_file: false", u.ID, u.SecretsFile)
+	case u.WriteSecretsFile && !g.Ignored(u.SecretsFile):
+		add("fail", "%s: %s is not ignored by git; add it to .gitignore before CI writes it", u.ID, u.SecretsFile)
+	case !u.WriteSecretsFile && !tracked:
+		add("fail", "%s: %s is not tracked, so CI has no secrets file; set write_secrets_file: true", u.ID, u.SecretsFile)
 	}
-	if *remote {
-		if !ghOK {
-			return errors.New("--remote needs gh signed in and a github.com origin")
-		}
-		u, ok := cfg.Unit(*unitFlag)
-		if !ok {
-			return errors.New("--remote needs --unit with a unit ID")
-		}
-		fmt.Fprintf(e.Out, "\nThis dispatches %s on %s (action=doctor, unit=%s): a GitHub-hosted runner loads the CI key and pinned host keys from %s and runs `ssh %s@<host> true`. It deploys nothing and records no deployment.\n", config.WorkflowName, repo, u.ID, u.Environment, u.SSH.User)
-		ok, err := confirm(e, "Dispatch it?", *yes)
-		if err != nil || !ok {
-			return err
-		}
-		inputs, _ := json.Marshal(map[string]string{"action": "doctor", "unit": u.ID})
-		out, err := e.Runner.Run(strings.NewReader(string(inputs)), "gh", "workflow", "run", filepath.Base(config.WorkflowPath), "--repo", repo, "--ref", cfg.Branch, "--json")
-		if err != nil {
-			return err
-		}
-		fmt.Fprint(e.Out, string(out))
-		fmt.Fprintf(e.Out, "Follow it with: gh run list --workflow %s --repo %s --limit 1\n", filepath.Base(config.WorkflowPath), repo)
-	}
-	if failed {
-		return errors.New("doctor found problems (fail lines above)")
-	}
-	return nil
 }

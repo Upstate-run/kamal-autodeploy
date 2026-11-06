@@ -14,6 +14,8 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/Upstate-run/kamal-autodeploy/internal/config"
 	"github.com/Upstate-run/kamal-autodeploy/internal/discover"
 	"github.com/Upstate-run/kamal-autodeploy/internal/generate"
@@ -39,6 +41,7 @@ const usage = `kamal-autodeploy: merge-to-main deploys of the Kamal services a c
 Independent open-source project; not affiliated with 37signals or the Kamal project.
 
 Usage:
+  kamal-autodeploy ready [--offline]         assess repository readiness; writes nothing
   kamal-autodeploy plan                      show the discovered plan and the file diff; writes nothing
   kamal-autodeploy init [--dry-run] [--yes]  write .kamal-autodeploy.yml and the workflow
   kamal-autodeploy provision [--unit ID]     set up GitHub environments, the CI SSH key,
@@ -60,6 +63,7 @@ type Env struct {
 	Piper  Piper
 	// Interactive is true when In is a terminal (confirmations may be asked).
 	Interactive bool
+	Color       bool // output is a color-capable terminal; Main honors even an empty NO_COLOR
 	Getenv      func(string) string
 }
 
@@ -71,7 +75,8 @@ func Main(args []string) int {
 		return 1
 	}
 	r := osRunner{dir: dir}
-	env := &Env{Dir: dir, In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Runner: r, Piper: r, Interactive: isTerminal(os.Stdin), Getenv: os.Getenv}
+	_, noColor := os.LookupEnv("NO_COLOR")
+	env := &Env{Color: isTerminal(os.Stdout) && !noColor && os.Getenv("TERM") != "dumb", Dir: dir, In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Runner: r, Piper: r, Interactive: isTerminal(os.Stdin), Getenv: os.Getenv}
 	if err := Run(env, args); err != nil {
 		fmt.Fprintln(os.Stderr, "kamal-autodeploy:", err)
 		return 1
@@ -80,8 +85,7 @@ func Main(args []string) int {
 }
 
 func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func Run(e *Env, args []string) error {
@@ -100,6 +104,8 @@ func Run(e *Env, args []string) error {
 		}
 		fmt.Fprintln(e.Out, v)
 		return nil
+	case "ready":
+		return readyCommand(e, args[1:])
 	case "plan":
 		return initCommand(e, append([]string{"--dry-run"}, args[1:]...))
 	case "init":
@@ -245,7 +251,7 @@ func initCommand(e *Env, args []string) error {
 	if owner == "" {
 		slug = "(no github.com origin remote)"
 	}
-	printPlan(e.Out, slug, cfg, report)
+	printPlan(e, slug, cfg, report)
 	if cfg.ToolVersion == "" {
 		return errors.New("this is a development build; pass --tool-version (a release tag or a full commit SHA of kamal-autodeploy) so the workflow installs an exact version")
 	}
@@ -334,9 +340,11 @@ func initCommand(e *Env, args []string) error {
 			return err
 		}
 	}
-	fmt.Fprintln(e.Out, "Written. Nothing was deployed. Next: review and commit both files, then run kamal-autodeploy provision.")
+	e.heading("FILES WRITTEN")
+	fmt.Fprintln(e.Out, "Written. Nothing was deployed.")
+	e.next("Review and commit both files", "Publish the workflow on the default branch, then run:\n  kamal-autodeploy provision")
 	if !cfg.Automatic() {
-		fmt.Fprintln(e.Out, "Manual activation: publish the workflow on the default branch, authorize the CI key, run doctor --remote, then dispatch a manual deploy. After verification, run init --activation automatic and review/commit both files to enable CI-triggered deployment.")
+		fmt.Fprintln(e.Out, "\nManual activation: CI completion will not deploy. Finish provisioning, verify runner login and a manual deployment before enabling automatic deploys.")
 	}
 	return nil
 }
@@ -367,7 +375,8 @@ func writeFile(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-func printPlan(out io.Writer, slug string, c *config.Config, r *discover.Report) {
+func printPlan(e *Env, slug string, c *config.Config, r *discover.Report) {
+	out := e.Out
 	fmt.Fprintf(out, "kamal-autodeploy plan for %s (deploy branch %s)\n\n", slug, c.Branch)
 	fmt.Fprintf(out, "Activation: %s\n\n", c.EffectiveActivation())
 	fmt.Fprintln(out, "CI gates (a unit deploys only after all of its required workflows pass on the branch)")
@@ -392,10 +401,10 @@ func printPlan(out io.Writer, slug string, c *config.Config, r *discover.Report)
 			order = append(order, u.ID)
 		}
 	}
-	fmt.Fprintln(out, "\nDeployment units (in deploy order)")
+	e.heading("Deployment units (in deploy order)")
 	for _, id := range order {
 		u, _ := c.Unit(id)
-		fmt.Fprintf(out, "  %s  ->  GitHub environment %s\n", u.ID, u.Environment)
+		fmt.Fprintf(out, "\n  %s  ->  GitHub environment %s\n", e.label("info", u.ID), u.Environment)
 		args := strings.Join(u.Args, " ")
 		if args != "" {
 			args = " " + args
@@ -470,7 +479,14 @@ func printPlan(out io.Writer, slug string, c *config.Config, r *discover.Report)
 		if len(lines) == 0 {
 			continue
 		}
-		fmt.Fprintf(out, "\n%s\n%s\n", level.title, strings.Join(lines, "\n"))
+		style := "warn"
+		if level.key == discover.Unsupported {
+			style = "fail"
+		}
+		if level.key == discover.Info {
+			style = "info"
+		}
+		fmt.Fprintf(out, "\n%s\n\n%s\n", e.label(style, level.title), strings.Join(lines, "\n"))
 	}
 	fmt.Fprintln(out)
 }
