@@ -18,7 +18,7 @@ import (
 const (
 	CheckoutAction  = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
 	SetupGoAction   = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0"
-	SetupRubyAction = "ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0"
+	SetupRubyAction = "ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # Ruby 3.4.12 support"
 	GoVersion       = "1.27.3"
 	GemRubyVersion  = "3.4"
 	ModulePath      = "github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy"
