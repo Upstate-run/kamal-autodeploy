@@ -104,7 +104,7 @@ const hostFP = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 func provisionRepo(t *testing.T) string {
 	dir := fixtureRepo(t, "two-services", "https://github.com/acme/two-services.git")
 	e, out := testEnv(dir)
-	if err := Run(e, []string{"init", "--yes", "--tool-version", "v0.1.0"}); err != nil {
+	if err := Run(e, []string{"init", "--yes", "--tool-version", "v0.1.4"}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	// Local ignored secrets: one literal, one computed by a command (never evaluated).

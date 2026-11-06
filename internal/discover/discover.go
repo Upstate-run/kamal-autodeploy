@@ -63,6 +63,7 @@ func (r *Report) Blocking() []Note {
 }
 
 type Options struct {
+	DirectKamal bool
 	Branch      string
 	Owner       string // repository owner, for GHCR GITHUB_TOKEN eligibility
 	ToolVersion string
@@ -179,27 +180,33 @@ func Discover(root string, opts Options) (*Report, error) {
 		}
 		u.Environment = envName
 
-		// Command: the project's own wrapper first, then bin/kamal, then kamal.
-		switch {
-		case info.Wrapper != "":
-			u.Command = info.Wrapper
-			r.Notes = append(r.Notes, Note{Level: Info, Unit: id, Text: fmt.Sprintf("uses the project's wrapper %s (it selects %s itself)", info.Wrapper, kc.Base)})
-		case hasBinKamal:
-			u.Command = "bin/kamal"
-		default:
+		if opts.DirectKamal {
 			u.Command = "kamal"
-		}
-		if info.Wrapper == "" && kc.Base != "config/deploy.yml" {
-			u.Args = append(u.Args, "-c", kc.Base)
-		}
-		if kc.Destination != "" {
-			u.Args = append(u.Args, "-d", kc.Destination)
-			if info.Wrapper != "" {
-				r.Notes = append(r.Notes, Note{Level: Unknown, Unit: id, Text: "wrapper " + info.Wrapper + " combined with destination " + kc.Destination + ": confirm the wrapper passes -d through"})
+			u.Args = config.DirectArgs(kc.Base, kc.Destination)
+			r.Notes = append(r.Notes, Note{Level: Info, Unit: id, Text: "CI invokes Kamal directly with explicit config/destination; the laptop wrapper is not executed"})
+		} else {
+			// Command: the project's own wrapper first, then bin/kamal, then kamal.
+			switch {
+			case info.Wrapper != "":
+				u.Command = info.Wrapper
+				r.Notes = append(r.Notes, Note{Level: Info, Unit: id, Text: fmt.Sprintf("uses the project's wrapper %s (it selects %s itself)", info.Wrapper, kc.Base)})
+			case hasBinKamal:
+				u.Command = "bin/kamal"
+			default:
+				u.Command = "kamal"
+			}
+			if info.Wrapper == "" && kc.Base != "config/deploy.yml" {
+				u.Args = append(u.Args, "-c", kc.Base)
+			}
+			if kc.Destination != "" {
+				u.Args = append(u.Args, "-d", kc.Destination)
+				if info.Wrapper != "" {
+					r.Notes = append(r.Notes, Note{Level: Unknown, Unit: id, Text: "wrapper " + info.Wrapper + " combined with destination " + kc.Destination + ": confirm the wrapper passes -d through"})
+				}
 			}
 		}
 		switch {
-		case lockedKamal != "" && (u.Command != "kamal"):
+		case lockedKamal != "" && (u.Command != "kamal" || opts.DirectKamal):
 			u.Kamal = config.KamalBundler
 		case lockedKamal != "":
 			u.Kamal, u.KamalVersion = config.KamalGem, lockedKamal

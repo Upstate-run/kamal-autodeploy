@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/Upstate-run/kamal-autodeploy/internal/config"
 	"github.com/Upstate-run/kamal-autodeploy/internal/discover"
 )
 
@@ -32,15 +33,26 @@ func verifyHostsCommand(e *Env, args []string) error {
 	}
 	found := false
 	for _, unit := range report.Config.Units {
-		if unit.Config != *configPath || unit.Destination != *destination || unit.Command != *command {
+		if unit.Config != *configPath || unit.Destination != *destination {
 			continue
 		}
-		if !slices.Equal(unit.Args, f.Args()) {
-			return errors.New("effective Kamal arguments differ from the discovered config/destination routing; refusing deployment")
-		}
-		route, ok := discover.CommandRouting(root, *command)
-		if !ok || (route != "" && route != *configPath) {
-			return errors.New("wrapper executable routing is unsupported or conflicts with the selected config")
+		if *command == "kamal" {
+			// Direct invocation never executes a project wrapper. Validate its
+			// complete routing against the chosen static config/destination.
+			if !config.MatchDirectArgs(*configPath, *destination, f.Args()) {
+				return errors.New("direct Kamal arguments conflict with the selected config/destination")
+			}
+		} else {
+			if unit.Command != *command {
+				continue
+			}
+			if !slices.Equal(unit.Args, f.Args()) {
+				return errors.New("effective Kamal arguments differ from the discovered config/destination routing; refusing deployment")
+			}
+			route, ok := discover.CommandRouting(root, *command)
+			if !ok || (route != "" && route != *configPath) {
+				return errors.New("wrapper executable routing is unsupported or conflicts with the selected config")
+			}
 		}
 		found = true
 		for _, info := range report.Units {

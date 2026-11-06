@@ -67,3 +67,5 @@ Existing environments must have a single custom branch policy for the deploy bra
 with no wildcard or tag policies; provisioning refuses unsafe environments before
 accessing secrets and leaves reviewer protections intact. Environment names are compared
 case-insensitively. A failed recovery deploy never clears a failed-rollback hold.
+
+**Direct invocation and activation.** Direct Kamal mode validates its complete config/destination arguments and the selected checkout's static hosts without interpreting or executing an unused laptop wrapper. Arbitrary extra direct arguments are rejected; wrapper mode keeps its existing bounded verification. New configurations are manually activated: the workflow omits CI-completion triggers and rejects automatic work before deployment, while explicit dispatch still requires green CI and preserves unit ordering. Omitted activation in existing configurations retains their prior automatic behavior. Publishing activation changes does not cancel older jobs already running; operators must manage those jobs explicitly when pausing a live deployment queue.

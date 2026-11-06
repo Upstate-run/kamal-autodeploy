@@ -33,6 +33,9 @@ type GuardResult struct {
 // explicit requests and are never skipped as stale. For deploy and rollback it opens a
 // Deployment with status in_progress; Record closes it.
 func Guard(api GuardAPI, cfg *config.Config, unit config.Unit, d Decision, runID, logURL string) (GuardResult, error) {
+	if d.AutomaticHead != "" && !cfg.Automatic() {
+		return GuardResult{}, errors.New("automatic deployment is disabled (activation: manual)")
+	}
 	if d.Action == ActionDoctor {
 		return GuardResult{Proceed: true, Reason: "connectivity check"}, nil
 	}

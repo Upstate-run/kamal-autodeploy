@@ -37,6 +37,7 @@ func doctorCommand(e *Env, args []string) error {
 	}
 	var checks []check
 	add := func(level, format string, a ...any) { checks = append(checks, check{level, fmt.Sprintf(format, a...)}) }
+	add("ok", "activation is %s", cfg.EffectiveActivation())
 	g := gitx.Git{Dir: root}
 
 	// Local files.

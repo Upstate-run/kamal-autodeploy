@@ -1,9 +1,10 @@
 # kamal-autodeploy configuration: the reviewed plan for merge-to-main deploys.
 # Edit it freely, then run `kamal-autodeploy init` to regenerate the workflow.
 # Docs: https://github.com/Upstate-run/kamal-autodeploy#configuration
+activation: manual
 version: 1
 branch: main
-tool_version: v0.1.0
+tool_version: v0.1.4
 ci:
     - name: CI
       path: .github/workflows/ci.yml

@@ -136,15 +136,19 @@ func render(c *config.Config) string {
 	w.l(0, "name: %s", config.WorkflowName)
 	w.l(0, "")
 	w.l(0, "on:")
-	w.l(2, "# Deploys follow CI on the trusted branch; a green pull request check is never enough.")
-	w.l(2, "workflow_run:")
-	names := []string{}
-	for _, r := range required {
-		names = append(names, quote(r))
+	if c.Automatic() {
+		w.l(2, "# Deploys follow CI on the trusted branch; a green pull request check is never enough.")
+		w.l(2, "workflow_run:")
+		names := []string{}
+		for _, r := range required {
+			names = append(names, quote(r))
+		}
+		w.l(4, "workflows: [%s]", strings.Join(names, ", "))
+		w.l(4, "types: [completed]")
+		w.l(4, "branches: [%s]", quote(c.Branch))
+	} else {
+		w.l(2, "# Manual onboarding: CI completions do not start this workflow.")
 	}
-	w.l(4, "workflows: [%s]", strings.Join(names, ", "))
-	w.l(4, "types: [completed]")
-	w.l(4, "branches: [%s]", quote(c.Branch))
 	w.l(2, "workflow_dispatch:")
 	w.l(4, "inputs:")
 	w.l(6, "action:")
@@ -220,24 +224,32 @@ func render(c *config.Config) string {
 		`set -euo pipefail`,
 		`fail() { echo "::error::$1"; exit 1; }`,
 		`case "$EVENT_NAME" in`,
-		`  workflow_run)`,
-		`    [ "$RUN_REPO" = "$REPO" ] || fail "CI run belongs to another repository"`,
-		`    [ "$RUN_HEAD_REPO" = "$REPO" ] || fail "CI run was for a fork"`,
-		`    [ "$RUN_EVENT" = "push" ] || fail "CI run was not a push"`,
-		`    [ "$RUN_BRANCH" = ` + quote(c.Branch) + ` ] || fail "CI run was not on ` + c.Branch + `"`,
-		`    case "$RUN_NAME|${RUN_PATH%%@*}" in`,
-		`      ` + strings.Join(pairs, "|") + `) ;;`,
-		`      *) fail "unexpected CI workflow" ;;`,
-		`    esac`,
-		`    sha="$RUN_SHA" ;;`,
+	}
+	if c.Automatic() {
+		script = append(script,
+			`  workflow_run)`,
+			`    [ "$RUN_REPO" = "$REPO" ] || fail "CI run belongs to another repository"`,
+			`    [ "$RUN_HEAD_REPO" = "$REPO" ] || fail "CI run was for a fork"`,
+			`    [ "$RUN_EVENT" = "push" ] || fail "CI run was not a push"`,
+			`    [ "$RUN_BRANCH" = `+quote(c.Branch)+` ] || fail "CI run was not on `+c.Branch+`"`,
+			`    case "$RUN_NAME|${RUN_PATH%%@*}" in`,
+			`      `+strings.Join(pairs, "|")+`) ;;`,
+			`      *) fail "unexpected CI workflow" ;;`,
+			`    esac`,
+			`    sha="$RUN_SHA" ;;`,
+		)
+	} else {
+		script = append(script, `  workflow_run) fail "automatic deployment is disabled (activation: manual)" ;;`)
+	}
+	script = append(script,
 		`  workflow_dispatch)`,
-		`    [ "$REF" = ` + quote("refs/heads/"+c.Branch) + ` ] || fail "dispatch must run on ` + c.Branch + `"`,
+		`    [ "$REF" = `+quote("refs/heads/"+c.Branch)+` ] || fail "dispatch must run on `+c.Branch+`"`,
 		`    sha="$DISPATCH_SHA" ;;`,
 		`  *) fail "unsupported event" ;;`,
 		`esac`,
 		`[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "invalid commit SHA"`,
 		`echo "sha=$sha" >> "$GITHUB_OUTPUT"`,
-	}
+	)
 	for _, s := range script {
 		w.l(10, "%s", s)
 	}
@@ -347,7 +359,11 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 	w.l(10, "BASELINE: ${{ needs.select.outputs.%s_baseline }}", k)
 	w.l(10, "ROLLBACK_VERSION: ${{ needs.select.outputs.%s_version }}", k)
 	w.l(10, "RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
-	w.l(8, `run: kamal-autodeploy guard --unit %s --environment %s --branch %s --action "$ACTION" --sha "$DEPLOY_SHA" --baseline "$BASELINE" --automatic-head "$AUTOMATIC_HEAD" --version "$ROLLBACK_VERSION" --run-url "$RUN_URL"`, u.ID, u.Environment, shellQuote(c.Branch))
+	activationArg := ""
+	if !c.Automatic() {
+		activationArg = " --activation " + shellQuote(config.ActivationManual)
+	}
+	w.l(8, `run: kamal-autodeploy guard --unit %s --environment %s --branch %s --action "$ACTION" --sha "$DEPLOY_SHA" --baseline "$BASELINE" --automatic-head "$AUTOMATIC_HEAD"%s --version "$ROLLBACK_VERSION" --run-url "$RUN_URL"`, u.ID, u.Environment, shellQuote(c.Branch), activationArg)
 
 	proceed := "steps.guard.outputs.proceed == 'true'"
 	kamalRuns := proceed + " && (env.ACTION == 'deploy' || env.ACTION == 'rollback')"
@@ -476,13 +492,17 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 	for _, a := range u.Args {
 		args += " " + shellQuote(a)
 	}
+	execution := shellQuote(u.Command)
+	if u.Command == "kamal" && u.Kamal == config.KamalBundler {
+		execution = "bundle exec " + execution
+	}
 	w.l(8, "run: |")
 	w.l(10, "set -euo pipefail")
 	w.l(10, `case "$ACTION" in`)
-	w.l(12, `deploy) %s deploy%s --version="$DEPLOY_SHA" ;;`, shellQuote(u.Command), args)
+	w.l(12, `deploy) %s deploy%s --version="$DEPLOY_SHA" ;;`, execution, args)
 	w.l(12, `rollback)`)
 	w.l(14, `[[ "$ROLLBACK_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "::error::invalid rollback version"; exit 1; }`)
-	w.l(14, `%s rollback "$ROLLBACK_VERSION"%s ;;`, shellQuote(u.Command), args)
+	w.l(14, `%s rollback "$ROLLBACK_VERSION"%s ;;`, execution, args)
 	w.l(12, `*) echo "::error::unknown action $ACTION"; exit 1 ;;`)
 	w.l(10, `esac`)
 

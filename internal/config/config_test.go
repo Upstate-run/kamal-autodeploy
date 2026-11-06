@@ -166,3 +166,65 @@ func TestEnvironmentNamesAreCaseInsensitive(t *testing.T) {
 		t.Fatalf("expected environment collision, got %v", err)
 	}
 }
+
+func TestActivationCompatibilityAndValidation(t *testing.T) {
+	legacy, err := Parse([]byte(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !legacy.Automatic() {
+		t.Fatal("legacy config lost automatic behavior")
+	}
+	for _, mode := range []string{ActivationManual, ActivationAutomatic, "invalid"} {
+		c := *legacy
+		c.ToolVersion = "v0.1.4"
+		c.Activation = mode
+		if (c.Validate() == nil) != (mode != "invalid") {
+			t.Fatalf("activation %q validation", mode)
+		}
+		if mode == ActivationManual && c.Automatic() {
+			t.Fatal("manual activation enabled automatic work")
+		}
+	}
+}
+
+func TestDirectKamalRoutingIsStructured(t *testing.T) {
+	c, err := Parse([]byte(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := &c.Units[0]
+	u.Command = "kamal"
+	u.Args = DirectArgs(u.Config, u.Destination)
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-c", "config/deploy.other.yml"}, {"-c", "config/deploy.yml", "-c", "config/deploy.other.yml"}, {"-d", "other"}, {"--skip-hooks"}} {
+		u.Args = args
+		if c.Validate() == nil {
+			t.Fatalf("conflicting direct arguments accepted: %v", args)
+		}
+	}
+	u.Config = "../outside.yml"
+	u.Args = DirectArgs(u.Config, "")
+	if c.Validate() == nil {
+		t.Fatal("direct config traversal accepted")
+	}
+}
+
+func TestActivationRequiresCompatibleRuntimePin(t *testing.T) {
+	c, err := Parse([]byte(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Activation = ActivationManual
+	if c.Validate() == nil {
+		t.Fatal("new activation config accepted an incompatible old runtime")
+	}
+	for _, version := range []string{"v0.1.4", "v0.2.0", "v1.0.0", strings.Repeat("a", 40)} {
+		c.ToolVersion = version
+		if err := c.Validate(); err != nil {
+			t.Fatalf("compatible pin %s: %v", version, err)
+		}
+	}
+}

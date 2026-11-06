@@ -28,25 +28,37 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 ## Install
 
 ```sh
-go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.0
+go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.4
 ```
 
-Release archives with a `checksums.txt` are built with GoReleaser ([`.goreleaser.yaml`](.goreleaser.yaml)) once the first version is tagged. Until then, install from a commit: `go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@<full-commit-sha>`. Either way the Go module proxy and checksum database verify what you get, and the generated workflow pins the same exact version.
+Published releases also provide macOS/Linux binary archives and `checksums.txt`; use those when Go is not installed locally and verify the archive checksum before use. Go installs use the module proxy and checksum database. The generated workflow pins the reviewed tool version. See [the release configuration](.goreleaser.yaml).
 
 ## Quick start
 
 From the root of a Kamal project with a GitHub `origin`:
 
 ```sh
-kamal-autodeploy plan        # discovery + plan + file diff; writes nothing
-kamal-autodeploy init        # writes .kamal-autodeploy.yml and the workflow after a yes
+kamal-autodeploy plan --direct-kamal  # discovery + diff; writes nothing
+kamal-autodeploy init --direct-kamal  # new configs default to activation: manual
 git add .kamal-autodeploy.yml .github/workflows/kamal-autodeploy.yml
-git commit -m "Deploy merged changes with kamal-autodeploy"
-kamal-autodeploy provision   # GitHub setup; then execute its printed public-key authorization command
+git commit -m "Prepare manual Kamal deployment"
+kamal-autodeploy provision   # GitHub setup; execute the printed public-key authorization command
 kamal-autodeploy doctor      # local + GitHub checks
-kamal-autodeploy doctor --remote --unit <id>   # SSH test from a real GitHub runner (asks first)
-git push                     # the next green CI run on main deploys what changed
+# Push/review/merge these files onto the default branch. This manual workflow
+# does not deploy when CI completes. Then, replacing shop with the planned unit:
+kamal-autodeploy doctor --remote --unit shop
+# Wait for the remote SSH check to pass, then explicitly deploy:
+gh workflow run kamal-autodeploy.yml -f action=deploy -f unit=shop
+# Verify production and the exact-version receipt if using Upstate. Then:
+kamal-autodeploy init --activation automatic
+# Review, commit and merge BOTH regenerated files to enable CI-triggered deployment.
 ```
+
+`--direct-kamal` leaves laptop wrappers untouched and invokes the installed Kamal directly with explicit config/destination arguments. For `kamal: bundler`, it uses `bundle exec kamal` and the project's lockfile; `kamal: gem` uses the pinned installed gem. Wrapper-specific environment setup or other custom behavior is not carried into direct mode: express required behavior in reviewed Kamal configuration/hooks before opting in. Omit the flag to keep the existing wrapper path and its strict routing checks.
+
+Activation and direct-init opt-in require v0.1.4 or newer (or a compatible source SHA). Explicit opt-in uses the running tool version unless `--tool-version` is supplied. New `init` configurations default to `activation: manual`. They have only `workflow_dispatch`; CI checks are still required for an explicit deployment. If required CI is still pending, manual-mode operators must dispatch again after it passes; there is no automatic follow-up run. Manual dispatch retains the existing ordered reconciliation of pending units, so it may deploy other units and prerequisites as described in the dispatch confirmation. The manual setting disables CI-triggered runs, not this explicit reconciliation.
+
+Rediscovery preserves activation from a valid existing configuration; invalid prior configuration defaults safely to manual unless explicitly overridden. Configs from earlier versions that omit `activation` remain automatic when regenerated. Use `init --activation manual` to stop future CI-triggered runs, or `init --activation automatic` to enable them. Regenerate and commit both files together. Switching modes does not cancel runs already in progress, and automatic activation itself is an operator-reviewed change; the tool does not infer successful onboarding from an earlier health check.
 
 `init` never deploys anything. Running it again regenerates the workflow from the config and shows a diff; it refuses to overwrite a workflow it did not generate, or one you edited by hand (use `--force` for the latter only).
 
@@ -58,9 +70,9 @@ The plan lists every deployment unit with the exact command it will run, its con
 
 ## How a deploy is chosen
 
-The generated workflow has one `select` job and one deploy job per unit.
+The generated workflow has one `select` job and one deploy job per unit. Manual activation omits the CI trigger and rejects CI-completion events at verification, selection and guard boundaries.
 
-1. **Trigger.** `workflow_run` after your CI workflow(s) complete, plus `workflow_dispatch`. Before checkout, the run is verified: same repository, not a fork, a `push` event, branch `main`, an expected workflow name *and* path, and a 40-character head SHA. A green pull request check never deploys.
+1. **Trigger.** When activation is automatic, `workflow_run` after your CI workflow(s) complete, plus `workflow_dispatch`. Before checkout, the run is verified: same repository, not a fork, a `push` event, branch `main`, an expected workflow name *and* path, and a 40-character head SHA. A green pull request check never deploys.
 2. **Baseline.** For each unit, the newest GitHub Deployment (task `kamal-autodeploy`) in the unit's environment that ever reached `success`. GitHub's own environment deployments (task `deploy`) are ignored.
 3. **Candidate.** The newest commit on main's first-parent history (up to 25 back, always including the trigger) that is newer than the baseline and whose **required workflows for that unit** all succeeded for that exact SHA on a push to main. Pending, failed, cancelled, skipped or absent runs are not success. If a newer commit is still in CI, the run waits for it (its completion starts another run). Picking the newest green commit is what makes a replaced queued run safe.
 4. **Changes.** Files changed between the baseline and the candidate (`git diff --no-renames`, so a move counts for both sides). Ignore rules apply first, then the unit's `paths` and `shared` rules. Files no unit claims deploy every unit (`unclassified: deploy`, the default) or stop the run (`unclassified: stop`).
@@ -79,6 +91,7 @@ Scenarios covered by tests (`internal/selection`): first deploy, single config, 
 
 | Key | Meaning |
 | --- | --- |
+| `activation` | `manual` or `automatic`. New init configs are manual; omitted in legacy configs means automatic. |
 | `branch` | The trusted deploy branch (must be the default branch). |
 | `tool_version` | Exact kamal-autodeploy version the workflow installs (tag, pseudo-version or full SHA). |
 | `ci[]` | `name` and `path` of each CI workflow that can gate a deploy. |
@@ -87,7 +100,7 @@ Scenarios covered by tests (`internal/selection`): first deploy, single config, 
 | `shared[]` | `paths` that deploy all listed `units`. |
 | `units[].id` | Unit ID (also the dispatch input and job name). |
 | `units[].environment` | GitHub environment holding this unit's secrets and deployed baseline. One per unit. |
-| `units[].command`, `args` | The project's own entry point (`bin/kamal-rails`, `bin/kamal`, `kamal`) and arguments after the subcommand (`-c`, `-d`). |
+| `units[].command`, `args` | A reviewed wrapper, or direct `kamal` with config/destination routing only. `init --direct-kamal` constructs explicit `-c`/`-d` arguments. |
 | `units[].requires[]` | CI workflow names that must pass for a commit before this unit deploys it. |
 | `units[].after[]`, `lock` | Ordering within a run; units with the same lock never deploy in parallel. |
 | `units[].paths[]` | Path ownership. Globs with `**`; `!pattern` excludes; last match wins. |
@@ -124,7 +137,7 @@ There are two separate SSH trust steps, and both are required:
 | Server host-key fingerprint | The runner reached the intended server | Pinned host keys in the GitHub environment |
 | Generated CI public key | The runner may log in as the configured SSH user | That user's `~/.ssh/authorized_keys` on every target |
 
-`provision` generates the CI pair and uploads its private half to GitHub. It **does not install the public half on the server**: execute the printed authorization command through an existing trusted SSH connection. Keep existing authorized keys. Supplying `--host-fingerprint` completes only the first row. Local `doctor` checks secret presence and host pins; only a successful remote doctor establishes runner login access. The remote doctor requires this workflow to exist on the default branch, so arrange the initial onboarding deployment/approval accordingly. If an existing CI secret is kept, its original public key must still be installed; the tool cannot recover it from GitHub's write-only secret store. A missing original public key needs an intentional paired-key replacement, not a host-pin bypass.
+`provision` generates the CI pair and uploads its private half to GitHub. It **does not install the public half on the server**: execute the printed authorization command through an existing trusted SSH connection. Keep existing authorized keys. Supplying `--host-fingerprint` completes only the first row. Local `doctor` checks secret presence and host pins; only a successful remote doctor establishes runner login access. The remote doctor requires this workflow on the default branch; publish it with manual activation first, then verify connectivity and an explicit deployment before enabling automatic triggers. If an existing CI secret is kept, its original public key must still be installed; the tool cannot recover it from GitHub's write-only secret store. A missing original public key needs an intentional paired-key replacement, not a host-pin bypass.
 
 `kamal-autodeploy provision` does this through your own `gh`, with a yes before each change. The same steps by hand:
 

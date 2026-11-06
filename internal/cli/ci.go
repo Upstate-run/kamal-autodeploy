@@ -146,10 +146,11 @@ func guardCommand(e *Env, args []string) error {
 	sha := f.String("sha", "", "")
 	baseline := f.String("baseline", "", "")
 	automaticHead := f.String("automatic-head", "", "")
+	activation := f.String("activation", config.ActivationAutomatic, "")
 	version := f.String("version", "", "")
 	runURL := f.String("run-url", "", "")
 	if err := f.Parse(args); err != nil || f.NArg() != 0 {
-		return errors.New("usage: kamal-autodeploy guard --unit U --environment E --branch B --action A --sha SHA [--baseline SHA] [--automatic-head SHA] [--version V] [--run-url URL]")
+		return errors.New("usage: kamal-autodeploy guard --unit U --environment E --branch B --action A --sha SHA [--baseline SHA] [--automatic-head SHA] [--activation manual|automatic] [--version V] [--run-url URL]")
 	}
 	if !config.ValidID(*unitID) || *environment == "" || *branch == "" {
 		return errors.New("guard needs --unit, --environment and --branch")
@@ -165,7 +166,10 @@ func guardCommand(e *Env, args []string) error {
 		return err
 	}
 	unit := config.Unit{ID: *unitID, Environment: *environment}
-	cfg := &config.Config{Branch: *branch}
+	if *activation != config.ActivationManual && *activation != config.ActivationAutomatic {
+		return errors.New("activation must be manual or automatic")
+	}
+	cfg := &config.Config{Branch: *branch, Activation: *activation}
 	runID := e.Getenv("GITHUB_RUN_ID")
 	d := selection.Decision{Unit: unit.ID, Action: *action, SHA: *sha, Baseline: *baseline, Version: *version, AutomaticHead: *automaticHead}
 	res, err := selection.Guard(client, cfg, unit, d, runID, *runURL)

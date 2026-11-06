@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -46,7 +49,14 @@ const (
 	KamalGem     = "gem"     // gem install kamal -v <kamal_version>
 )
 
+const (
+	ActivationManual    = "manual"
+	ActivationAutomatic = "automatic"
+)
+
 type Config struct {
+	// Omitted activation preserves automatic behavior of existing configs.
+	Activation   string     `yaml:"activation,omitempty"`
 	Version      int        `yaml:"version"`
 	Branch       string     `yaml:"branch"`
 	ToolVersion  string     `yaml:"tool_version"`
@@ -109,18 +119,19 @@ type Upstate struct {
 }
 
 var (
-	idPattern       = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
-	envPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
-	tokenPattern    = regexp.MustCompile(`^[A-Za-z0-9_./=:@+,-]+$`)
-	secretPattern   = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,99}$`)
-	hostPattern     = regexp.MustCompile(`^[A-Za-z0-9.:_-]{1,253}$`)
-	userPattern     = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
-	branchPattern   = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,100}$`)
-	versionPattern  = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?|[0-9a-f]{40})$`)
-	semverPattern   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	sha256Pattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	workflowPattern = regexp.MustCompile(`^\.github/workflows/[A-Za-z0-9._-]+\.ya?ml$`)
-	namePattern     = regexp.MustCompile(`^[^"'\x00-\x1f\\$` + "`" + `]{1,100}$`)
+	idPattern        = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
+	envPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	tokenPattern     = regexp.MustCompile(`^[A-Za-z0-9_./=:@+,-]+$`)
+	secretPattern    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,99}$`)
+	hostPattern      = regexp.MustCompile(`^[A-Za-z0-9.:_-]{1,253}$`)
+	userPattern      = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	branchPattern    = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,100}$`)
+	versionPattern   = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?|[0-9a-f]{40})$`)
+	sourceSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	semverPattern    = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	sha256Pattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	workflowPattern  = regexp.MustCompile(`^\.github/workflows/[A-Za-z0-9._-]+\.ya?ml$`)
+	namePattern      = regexp.MustCompile(`^[^"'\x00-\x1f\\$` + "`" + `]{1,100}$`)
 )
 
 // ValidID is the deployment unit ID shape (also used by workflow job and output names).
@@ -164,9 +175,56 @@ func Parse(raw []byte) (*Config, error) {
 	return &c, nil
 }
 
-// Validate checks every value that reaches the generated workflow or a shell. It is strict
-// on purpose: the workflow embeds these strings.
+// Automatic preserves legacy activation semantics when the field is omitted.
+func (c *Config) Automatic() bool { return c.Activation != ActivationManual }
+func (c *Config) EffectiveActivation() string {
+	if c.Activation == "" {
+		return ActivationAutomatic
+	}
+	return c.Activation
+}
+
+// DirectArgs is the complete routing constructed for a native Kamal invocation.
+func DirectArgs(configPath, destination string) []string {
+	args := []string{"-c", configPath}
+	if destination != "" {
+		args = append(args, "-d", destination)
+	}
+	return args
+}
+
+// MatchDirectArgs also accepts the implicit default config routing emitted by
+// earlier tool versions. All other flags, duplicate selectors and overrides fail.
+func MatchDirectArgs(configPath, destination string, args []string) bool {
+	explicit := DirectArgs(configPath, destination)
+	return slices.Equal(args, explicit) || (configPath == "config/deploy.yml" && slices.Equal(args, explicit[2:]))
+}
+
+// Validate checks every value that reaches the generated workflow or a shell.
+// SupportsActivationVersion prevents generating new configuration/guard flags
+// that an older pinned runtime cannot read. Exact source SHAs remain supported.
+func SupportsActivationVersion(version string) bool {
+	if sourceSHAPattern.MatchString(version) {
+		return true
+	}
+	base := strings.SplitN(strings.TrimPrefix(version, "v"), "-", 2)[0]
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	major, e1 := strconv.Atoi(parts[0])
+	minor, e2 := strconv.Atoi(parts[1])
+	patch, e3 := strconv.Atoi(parts[2])
+	if e1 != nil || e2 != nil || e3 != nil {
+		return false
+	}
+	return major > 0 || (major == 0 && (minor > 1 || (minor == 1 && patch >= 4)))
+}
+
 func (c *Config) Validate() error {
+	if c.Activation != "" && c.Activation != ActivationManual && c.Activation != ActivationAutomatic {
+		return errors.New("activation must be manual or automatic")
+	}
 	if c.Version != 1 {
 		return errors.New("version must be 1")
 	}
@@ -175,6 +233,9 @@ func (c *Config) Validate() error {
 	}
 	if !versionPattern.MatchString(c.ToolVersion) {
 		return errors.New("tool_version must be a release tag (v1.2.3), a Go pseudo-version or a full 40-character commit SHA")
+	}
+	if c.Activation != "" && !SupportsActivationVersion(c.ToolVersion) {
+		return errors.New("activation requires tool_version v0.1.4 or newer, or an exact compatible source SHA")
 	}
 	if c.Unclassified != UnclassifiedDeploy && c.Unclassified != UnclassifiedStop {
 		return errors.New("unclassified must be deploy or stop")
@@ -240,6 +301,14 @@ func (c *Config) Validate() error {
 		}
 		if u.Destination != "" && !envPattern.MatchString(u.Destination) {
 			return fmt.Errorf("unit %s: destination is invalid", u.ID)
+		}
+		if u.Command == "kamal" {
+			if u.Config == "" || strings.HasPrefix(u.Config, "/") || strings.Contains(u.Config, "..") || path.Clean(u.Config) != u.Config {
+				return fmt.Errorf("unit %s: direct Kamal needs a relative config path inside the repository", u.ID)
+			}
+			if !MatchDirectArgs(u.Config, u.Destination, u.Args) {
+				return fmt.Errorf("unit %s: direct Kamal args must match config and destination exactly", u.ID)
+			}
 		}
 		if len(u.Requires) == 0 {
 			return fmt.Errorf("unit %s: requires must name at least one ci workflow", u.ID)

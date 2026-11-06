@@ -178,9 +178,11 @@ func initCommand(e *Env, args []string) error {
 	branch := f.String("branch", "main", "")
 	toolVersion := f.String("tool-version", "", "")
 	rediscover := f.Bool("rediscover", false, "")
+	directKamal := f.Bool("direct-kamal", false, "")
+	activation := f.String("activation", "", "")
 	upstateCLI := f.String("upstate-cli", "", "")
 	if err := f.Parse(args); err != nil || f.NArg() != 0 {
-		return errors.New("usage: kamal-autodeploy init [--dry-run] [--yes] [--branch main] [--tool-version vX.Y.Z] [--rediscover] [--force] [--upstate-cli VERSION|off]")
+		return errors.New("usage: kamal-autodeploy init [--dry-run] [--yes] [--branch main] [--tool-version vX.Y.Z] [--rediscover] [--force] [--direct-kamal] [--activation manual|automatic] [--upstate-cli VERSION|off]")
 	}
 	root, err := repoRoot(e.Dir)
 	if err != nil {
@@ -205,11 +207,34 @@ func initCommand(e *Env, args []string) error {
 		}
 		fmt.Fprintf(e.Out, "Using the reviewed %s (pass --rediscover to propose a fresh one).\n\n", config.FileName)
 	} else {
-		report, err = discover.Discover(root, discover.Options{Branch: *branch, Owner: owner, ToolVersion: tv})
+		report, err = discover.Discover(root, discover.Options{Branch: *branch, Owner: owner, ToolVersion: tv, DirectKamal: *directKamal})
 		if err != nil {
 			return err
 		}
 		cfg = report.Config
+		// Rediscovery changes application discovery, not deployment activation.
+		// Invalid or absent prior configuration must never opt into automation.
+		cfg.Activation = config.ActivationManual
+		if cfgErr == nil {
+			if previous, parseErr := config.Parse(existingCfg); parseErr == nil {
+				cfg.Activation = previous.Activation
+			}
+		}
+	}
+	if (*activation != "" || *directKamal) && *toolVersion == "" && tv != "" {
+		cfg.ToolVersion = tv
+	}
+	if *activation != "" {
+		cfg.Activation = *activation
+	}
+	if *directKamal {
+		// Mark explicit opt-in so validation rejects an incompatible old pin.
+		cfg.Activation = cfg.EffectiveActivation()
+		for i := range cfg.Units {
+			u := &cfg.Units[i]
+			u.Command = "kamal"
+			u.Args = config.DirectArgs(u.Config, u.Destination)
+		}
 	}
 	if *upstateCLI != "" {
 		if err := pinUpstateCLI(e, cfg, *upstateCLI); err != nil {
@@ -233,7 +258,7 @@ func initCommand(e *Env, args []string) error {
 		return fmt.Errorf("the proposed config is not valid yet: %w", err)
 	}
 	cfgBytes := existingCfg
-	if report != nil || *toolVersion != "" || *upstateCLI != "" {
+	if report != nil || *toolVersion != "" || *upstateCLI != "" || *directKamal || *activation != "" {
 		if cfgBytes, err = cfg.Marshal(); err != nil {
 			return err
 		}
@@ -310,6 +335,9 @@ func initCommand(e *Env, args []string) error {
 		}
 	}
 	fmt.Fprintln(e.Out, "Written. Nothing was deployed. Next: review and commit both files, then run kamal-autodeploy provision.")
+	if !cfg.Automatic() {
+		fmt.Fprintln(e.Out, "Manual activation: publish the workflow on the default branch, authorize the CI key, run doctor --remote, then dispatch a manual deploy. After verification, run init --activation automatic and review/commit both files to enable CI-triggered deployment.")
+	}
 	return nil
 }
 
@@ -341,6 +369,7 @@ func writeFile(path string, data []byte) error {
 
 func printPlan(out io.Writer, slug string, c *config.Config, r *discover.Report) {
 	fmt.Fprintf(out, "kamal-autodeploy plan for %s (deploy branch %s)\n\n", slug, c.Branch)
+	fmt.Fprintf(out, "Activation: %s\n\n", c.EffectiveActivation())
 	fmt.Fprintln(out, "CI gates (a unit deploys only after all of its required workflows pass on the branch)")
 	for _, w := range c.CI {
 		filter := "every push"
@@ -371,8 +400,12 @@ func printPlan(out io.Writer, slug string, c *config.Config, r *discover.Report)
 		if args != "" {
 			args = " " + args
 		}
-		fmt.Fprintf(out, "    deploy      %s deploy%s --version=<commit>\n", u.Command, args)
-		fmt.Fprintf(out, "    rollback    %s rollback <version>%s\n", u.Command, args)
+		command := u.Command
+		if command == "kamal" && u.Kamal == config.KamalBundler {
+			command = "bundle exec kamal"
+		}
+		fmt.Fprintf(out, "    deploy      %s deploy%s --version=<commit>\n", command, args)
+		fmt.Fprintf(out, "    rollback    %s rollback <version>%s\n", command, args)
 		cfg := u.Config
 		if u.Destination != "" {
 			cfg += " (destination " + u.Destination + ")"

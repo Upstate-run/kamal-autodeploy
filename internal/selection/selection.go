@@ -286,6 +286,15 @@ func Select(in Input, api API, repo gitx.Repo) ([]Decision, error) {
 
 func automatic(in Input, unit config.Unit, api API, repo gitx.Repo, ci *ciCache, candidates []string) (Decision, error) {
 	d := Decision{Unit: unit.ID, Action: ActionSkip, AutomaticHead: candidates[0]}
+	if !in.Config.Automatic() {
+		if in.Event == "workflow_run" {
+			d.Reason = "automatic deployment is disabled (activation: manual)"
+			return d, nil
+		}
+		// A manual dispatch remains an explicit reconciliation request, including
+		// ordered prerequisites/other pending units as in existing workflows.
+		d.AutomaticHead = ""
+	}
 	st, err := ReadState(api, unit)
 	if err != nil {
 		return d, err
@@ -360,7 +369,12 @@ func automatic(in Input, unit config.Unit, api API, repo gitx.Repo, ci *ciCache,
 	if chosen == "" {
 		switch {
 		case len(waiting) > 0:
-			d.Reason = "waiting for CI on " + strings.Join(waiting, ", ") + "; its completion starts another run"
+			d.Reason = "waiting for CI on " + strings.Join(waiting, ", ")
+			if in.Config.Automatic() {
+				d.Reason += "; its completion starts another run"
+			} else {
+				d.Reason += "; activation is manual, so dispatch again after CI passes"
+			}
 		case absent != "" && d.Attention != "":
 			d.Reason = "required workflow " + absentDetail + " did not run for " + short(absent)
 		case len(failed) > 0:

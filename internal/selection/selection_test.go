@@ -796,3 +796,80 @@ func TestSuppressedPredecessorFailureStillBlocksDependent(t *testing.T) {
 		t.Fatal("failed migration advanced a baseline")
 	}
 }
+
+func TestManualActivationDisablesCITriggersButAllowsExplicitDeploy(t *testing.T) {
+	cfg := simpleConfig(t)
+	cfg.Activation = config.ActivationManual
+	cfg.ToolVersion = "v0.1.4"
+	w := newWorld(t, cfg)
+	c := w.repo.commit("initial", "", map[string]string{"app/a.rb": "1"})
+	w.repo.push(c)
+	w.gh.green(c, ciWorkflow)
+	before := w.gh.count("web")
+	got := w.auto(c, nil)
+	expect(t, got, map[string]string{"web": ActionSkip})
+	if w.gh.count("web") != before {
+		t.Fatal("manual activation created automatic deployment")
+	}
+	// Even a stale/forged automatic decision must not open a deployment under this workflow.
+	_, err := Guard(w.api, cfg, cfg.Units[0], Decision{Unit: "web", Action: ActionDeploy, SHA: c, AutomaticHead: c}, "run", "")
+	if err == nil || w.gh.count("web") != before {
+		t.Fatal("guard allowed automatic work in manual activation")
+	}
+	expect(t, w.run("workflow_dispatch", c, nil, ActionDoctor, "web"), map[string]string{"web": ActionDoctor})
+	if w.gh.count("web") != before {
+		t.Fatal("doctor created a deployment")
+	}
+	expect(t, w.run("workflow_dispatch", c, nil, ActionDeploy, "web"), map[string]string{"web": ActionDeploy})
+}
+
+func TestManualActivationStillRequiresGreenCI(t *testing.T) {
+	cfg := simpleConfig(t)
+	cfg.Activation = config.ActivationManual
+	cfg.ToolVersion = "v0.1.4"
+	w := newWorld(t, cfg)
+	c := w.repo.commit("initial", "", map[string]string{"app/a.rb": "1"})
+	w.repo.push(c)
+	w.gh.ci(c, ciWorkflow, "completed", "failure")
+	expect(t, w.run("workflow_dispatch", c, nil, ActionDeploy, "web"), map[string]string{"web": ActionSkip})
+	if w.gh.count("web") != 0 {
+		t.Fatal("manual dispatch bypassed required CI")
+	}
+}
+
+func TestManualActivationReconcilesOrderedPrerequisitesOnDispatch(t *testing.T) {
+	cfg := twoConfig(t)
+	cfg.Activation = config.ActivationManual
+	cfg.ToolVersion = "v0.1.4"
+	w := newWorld(t, cfg)
+	base := twoServiceHistory(w)
+	c := w.repo.commit("schema", base, map[string]string{"db/schema.rb": "new"})
+	w.repo.push(c)
+	w.gh.green(c, ciWorkflow, edgeWorkflow)
+	got := w.run("workflow_dispatch", c, nil, ActionDeploy, "edge")
+	expect(t, got, map[string]string{"rails": ActionDeploy, "edge": ActionDeploy})
+}
+
+func TestPendingCIReasonMatchesActivation(t *testing.T) {
+	for _, mode := range []string{config.ActivationManual, config.ActivationAutomatic} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := twoConfig(t)
+			cfg.Activation = mode
+			cfg.ToolVersion = "v0.1.4"
+			w := newWorld(t, cfg)
+			base := twoServiceHistory(w)
+			c := w.repo.commit("rails-pending", base, map[string]string{"app/a.rb": "pending"})
+			w.repo.push(c)
+			w.gh.ci(c, ciWorkflow, "in_progress", "")
+			got := w.run("workflow_dispatch", c, nil, ActionDeploy, "edge")
+			reason := got["rails"].Reason
+			if mode == config.ActivationManual {
+				if !strings.Contains(reason, "dispatch again after CI passes") || strings.Contains(reason, "completion starts another run") {
+					t.Fatalf("manual pending guidance: %s", reason)
+				}
+			} else if !strings.Contains(reason, "completion starts another run") {
+				t.Fatalf("automatic guidance changed: %s", reason)
+			}
+		})
+	}
+}
