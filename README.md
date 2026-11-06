@@ -180,9 +180,12 @@ accessing secrets and leaves reviewer protections intact. Environment names are 
 case-insensitively. A failed recovery deploy never clears a failed-rollback hold.
 
 Only simple, statically understood command routing is accepted by CI host verification:
-a direct `kamal` command with the discovered arguments, a minimal Bundler binstub, or a
+a direct `kamal` command with the discovered arguments, a minimal Bundler binstub, the
+standard Bundler-generated Kamal binstub when no sibling `bin/bundle` loader exists, or a
 single `exec kamal "$@"` shell wrapper with an optional literal `-c` config. Wrappers may
 use the repository-root assignment shown in the examples. Other shell logic is refused;
 comments never determine which config a wrapper executes. SSH ports must be literal integers.
 
 Suppression of a previously failed automatic attempt returns a blocking guard error: the unit job remains failed and its dependants cannot deploy. It creates no new deployment record and does not run Kamal. Regression coverage includes two reconciliation runs after a shared-schema predecessor failure.
+
+Executable wrappers must begin with a plain supported Ruby or shell shebang. Interpreter options and alternate loader programs are rejected before host pins are approved.
