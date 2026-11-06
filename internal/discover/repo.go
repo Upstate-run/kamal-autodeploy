@@ -156,7 +156,7 @@ var dotenvKey = regexp.MustCompile(`^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(
 // SecretLine is one entry of a Kamal secrets file. The value is never kept: only its kind.
 type SecretLine struct {
 	Name string
-	Kind string // literal, env (exactly $NAME or ${NAME}), command ($(...)), interpolated
+	Kind string // literal, env (exactly $NAME or ${NAME}), command ($(...)), interpolated, unknown
 }
 
 // ReadSecretNames parses a dotenv-style file for names and value kinds only.
@@ -176,9 +176,34 @@ func ReadSecretNames(path string) ([]SecretLine, error) {
 		if m == nil {
 			continue
 		}
+		value := strings.TrimSpace(m[2])
+		if len(value) > 0 && (value[0] == '\'' || value[0] == '"') && !hasClosingQuote(value[1:], value[0]) {
+			// Do not interpret continuation lines as new providers. Multiline dotenv
+			// dialects differ; consuming the quoted value is safer than approving it.
+			out = append(out, SecretLine{Name: m[1], Kind: "unknown"})
+			for sc.Scan() {
+				if hasClosingQuote(sc.Text(), value[0]) {
+					break
+				}
+			}
+			continue
+		}
 		out = append(out, SecretLine{Name: m[1], Kind: valueKind(m[1], m[2])})
 	}
-	return out, nil
+	return out, sc.Err()
+}
+
+func hasClosingQuote(value string, quote byte) bool {
+	for i := 0; i < len(value); i++ {
+		if quote == '"' && value[i] == '\\' {
+			i++
+			continue
+		}
+		if value[i] == quote {
+			return true
+		}
+	}
+	return false
 }
 
 func valueKind(name, value string) string {

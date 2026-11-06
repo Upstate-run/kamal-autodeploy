@@ -406,9 +406,10 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 	ssh = append(ssh,
 		`eval "$(ssh-agent -s)" > /dev/null`,
 		`printf '%s\n' "$SSH_KEY" | ssh-add - 2> /dev/null`,
-		`echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"`,
-		`echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"`,
 	)
+	for _, name := range sshAgentVariables() {
+		ssh = append(ssh, fmt.Sprintf(`echo "%s=$%s" >> "$GITHUB_ENV"`, name, name))
+	}
 	for _, s := range ssh {
 		w.l(10, "%s", s)
 	}
@@ -426,11 +427,7 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 			`umask 077`,
 			`: > "$SECRETS_FILE"`,
 		}
-		names := append([]string{}, u.Secrets...)
-		if u.RegistryPassword == config.RegistryGitHubToken {
-			names = append(names, "KAMAL_REGISTRY_PASSWORD")
-		}
-		sort.Strings(names)
+		names := KamalSecretFileVariables(u)
 		for _, n := range names {
 			// A literal $NAME reference: Kamal resolves it from the step's environment.
 			lines = append(lines, fmt.Sprintf(`echo "%s=\$%s" >> "$SECRETS_FILE"`, n, n))
@@ -540,4 +537,31 @@ func prefixAll(prefix string, xs []string) []string {
 		out = append(out, prefix+x)
 	}
 	return out
+}
+
+// KamalProvidedVariables names managed workflow inputs available to the Kamal
+// process, separate from reviewed application-secret exports. Presence in the
+// environment does not establish that an optional GitHub value is configured.
+func KamalProvidedVariables(c *config.Config, u config.Unit) []string {
+	names := append([]string{"ACTION", "DEPLOY_SHA", "ROLLBACK_VERSION"}, sshAgentVariables()...)
+	if u.RegistryPassword == config.RegistryGitHubToken {
+		names = append(names, "KAMAL_REGISTRY_PASSWORD")
+	}
+	if c.Upstate != nil {
+		names = append(names, UpstateToken, UpstateEnvVar, UpstateURLVar)
+	}
+	return names
+}
+
+func sshAgentVariables() []string { return []string{"SSH_AUTH_SOCK", "SSH_AGENT_PID"} }
+
+// KamalSecretFileVariables is the complete set of references written to the
+// generated selected secrets file, separate from environment-only providers.
+func KamalSecretFileVariables(u config.Unit) []string {
+	names := append([]string(nil), u.Secrets...)
+	if u.RegistryPassword == config.RegistryGitHubToken {
+		names = append(names, "KAMAL_REGISTRY_PASSWORD")
+	}
+	sort.Strings(names)
+	return names
 }

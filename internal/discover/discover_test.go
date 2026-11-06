@@ -262,3 +262,50 @@ func TestExecutableWrappersRejectCRLFShebangs(t *testing.T) {
 		}
 	}
 }
+
+func TestSecretMetadataConsumesUnsupportedQuotedValues(t *testing.T) {
+	for _, value := range []string{"\"first\nBOGUS_PROVIDER=literal\n${OTHER}\n\"", "'first\nBOGUS_PROVIDER=literal\n'", "\"unterminated\nBOGUS_PROVIDER=literal"} {
+		root := t.TempDir()
+		write(t, root, map[string]string{"secrets": "KEY=" + value + "\n"})
+		entries, err := ReadSecretNames(filepath.Join(root, "secrets"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name != "KEY" || entries[0].Kind != "unknown" {
+			t.Fatalf("quoted continuation was accepted as a provider: %+v", entries)
+		}
+	}
+	root := t.TempDir()
+	write(t, root, map[string]string{"secrets": "KEY=\"literal\"\nNEXT=$NEXT\n"})
+	entries, err := ReadSecretNames(filepath.Join(root, "secrets"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Kind != "literal" || entries[1].Kind != "env" {
+		t.Fatalf("single-line classifications changed: %+v", entries)
+	}
+}
+
+func TestCustomSecretsPathUsesKamalDestinationAndCommonRules(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, map[string]string{
+		".github/workflows/ci.yml":     ci,
+		"config/deploy.yml":            "service: shop\nminimum_version: 2.12.0\nsecrets_path: config/credentials\nservers: [203.0.113.10]\n",
+		"config/deploy.production.yml": "{}\n",
+	})
+	r, err := Discover(root, Options{ToolVersion: "v0.1.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Units) != 1 || r.Units[0].SecretsFile != "config/credentials.production" || r.Units[0].CommonSecretsFile != "config/credentials-common" || r.Config.Units[0].SecretsFile != "config/credentials.production" {
+		t.Fatalf("paths differ from Kamal: %+v %+v", r.Units, r.Config.Units)
+	}
+	write(t, root, map[string]string{"config/deploy.yml": "service: shop\nminimum_version: 2.12.0\nsecrets_path: <%= ENV.fetch(\"SECRET_PATH\") %>\nservers: [203.0.113.10]\n"})
+	r, err = Discover(root, Options{ToolVersion: "v0.1.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Units[0].SecretsPathUnknown || r.Units[0].CommonSecretsFile != "" {
+		t.Fatal("unresolved path acquired a trusted common-file fallback")
+	}
+}

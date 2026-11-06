@@ -44,10 +44,12 @@ type UnitInfo struct {
 	AccessorySecret       []string
 	SecretLines           []SecretLine // from a tracked secrets file
 	SecretsFile           string
+	CommonSecretsFile     string
 	RegistryServer        string
 	RegistryServerUnknown bool
 	SecretsPathUnknown    bool
 	SecretIssues          []Note
+	RequiredSecrets       []string // actual Kamal inputs before registry-policy filtering
 	SecretsTracked        bool
 	UpstateEnv            string
 	UpstateOrigin         string
@@ -306,9 +308,12 @@ func Discover(root string, opts Options) (*Report, error) {
 		}
 		if secretsFile == "" {
 			secretsFile = ".kamal/secrets"
-			if kc.Destination != "" {
-				secretsFile = ".kamal/secrets." + kc.Destination
-			}
+		}
+		if !info.SecretsPathUnknown {
+			info.CommonSecretsFile = secretsFile + "-common"
+		}
+		if kc.Destination != "" {
+			secretsFile += "." + kc.Destination
 		}
 		u.SecretsFile = secretsFile
 		info.SecretsFile = secretsFile
@@ -324,6 +329,7 @@ func Discover(root string, opts Options) (*Report, error) {
 			info.SecretIssues = append(info.SecretIssues, n)
 		}
 		deploySecrets, accessorySecrets, unknownSecrets := kc.secretNames()
+		info.RequiredSecrets = append([]string(nil), deploySecrets...)
 		info.AccessorySecret = accessorySecrets
 		if unknownSecrets {
 			secretNote(Unknown, "some secret names are templated; add them to secrets")
@@ -373,6 +379,7 @@ func Discover(root string, opts Options) (*Report, error) {
 		}
 		switch {
 		case server == "" && registry["server"] == nil && len(registry) == 0:
+			info.RequiredSecrets = appendUnique(info.RequiredSecrets, "KAMAL_REGISTRY_PASSWORD")
 			u.RegistryPassword = config.RegistrySecret
 			r.Notes = append(r.Notes, Note{Level: Unknown, Unit: id, Text: "no registry block; Kamal defaults to Docker Hub with KAMAL_REGISTRY_PASSWORD"})
 		case strings.HasPrefix(server, "localhost") || strings.HasPrefix(server, "127.0.0.1"):

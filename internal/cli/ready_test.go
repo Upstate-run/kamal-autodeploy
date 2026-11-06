@@ -96,7 +96,7 @@ func TestReadySeparatesMissingGitHubSetupFromRepositoryPreparation(t *testing.T)
 func TestReadyFlagsTrackedSecretCommandsWithoutExecutingOrPrintingValues(t *testing.T) {
 	dir := fixtureRepo(t, "simple", "git@github.com:acme/shop.git")
 	marker := filepath.Join(dir, "should-not-exist")
-	raw := "RAILS_MASTER_KEY=$(touch " + marker + "; echo VERY_PRIVATE_VALUE)\n"
+	raw := "KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD\nRAILS_MASTER_KEY=$(touch " + marker + "; echo VERY_PRIVATE_VALUE)\n"
 	if err := os.WriteFile(filepath.Join(dir, ".kamal", "secrets"), []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +646,7 @@ func TestReadyChecksReviewedTokenRegistryServerCompatibility(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%v\n%s", err, out)
 				}
-				if kind == "unresolved" && !strings.Contains(out.String(), "compatibility with the reviewed GitHub-token policy remains unverified") {
+				if kind == "unresolved" && !strings.Contains(out.String(), "compatibility with the reviewed registry authentication policy remains unverified") {
 					t.Fatal(out.String())
 				}
 			}

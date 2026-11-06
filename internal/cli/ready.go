@@ -14,6 +14,7 @@ import (
 
 	"github.com/Upstate-run/kamal-autodeploy/internal/config"
 	"github.com/Upstate-run/kamal-autodeploy/internal/discover"
+	"github.com/Upstate-run/kamal-autodeploy/internal/generate"
 	"github.com/Upstate-run/kamal-autodeploy/internal/gitx"
 )
 
@@ -153,14 +154,6 @@ func readyCommand(e *Env, args []string) error {
 				add("fail", "%s: wrapper command/arguments differ from discovered config/destination routing; explicitly reconcile the reviewed plan", u.ID)
 			}
 
-			for _, name := range current.Secrets {
-				if name == "KAMAL_REGISTRY_PASSWORD" && u.RegistryPassword == config.RegistryGitHubToken {
-					continue
-				}
-				if !slices.Contains(u.Secrets, name) {
-					add("fail", "%s: newly discovered secret %s is not exported by the reviewed plan; explicitly reconcile required secrets", u.ID, name)
-				}
-			}
 			covered := current.SSH.Port == u.SSH.Port
 			for _, host := range current.SSH.Hosts {
 				covered = covered && slices.Contains(u.SSH.Hosts, host)
@@ -175,6 +168,7 @@ func readyCommand(e *Env, args []string) error {
 				continue
 			}
 			found = true
+			requiredSecretChecks(root, cfg, u, info, add)
 			if info.SSHUserUnknown {
 				add("unknown", "%s: Kamal SSH user is unresolved; compatibility with the reviewed login remains unverified", u.ID)
 			} else {
@@ -184,10 +178,10 @@ func readyCommand(e *Env, args []string) error {
 					}
 				}
 			}
-			if u.RegistryPassword == config.RegistryGitHubToken {
-				if info.RegistryServerUnknown {
-					add("unknown", "%s: registry server is unresolved; compatibility with the reviewed GitHub-token policy remains unverified", u.ID)
-				} else if info.RegistryServer != "ghcr.io" {
+			if info.RegistryServerUnknown {
+				add("unknown", "%s: registry server is unresolved; compatibility with the reviewed registry authentication policy remains unverified", u.ID)
+			} else if u.RegistryPassword == config.RegistryGitHubToken {
+				if info.RegistryServer != "ghcr.io" {
 					add("fail", "%s: current registry server is incompatible with the reviewed GitHub-token policy; explicitly reconcile registry authentication", u.ID)
 				}
 			}
@@ -222,10 +216,15 @@ func readyCommand(e *Env, args []string) error {
 	// Kamal may load secrets-common in addition to the selected secrets file.
 	// Parse names/kinds only, and only tracked files that a fresh runner receives.
 	g := gitx.Git{Dir: root}
-	secretFiles := map[string]bool{".kamal/secrets-common": true}
+	secretFiles := map[string]bool{}
 	for _, u := range cfg.Units {
 		secretFileChecks(root, u, add)
 		secretFiles[u.SecretsFile] = true
+		for _, info := range report.Units {
+			if info.Base == u.Config && info.Destination == u.Destination && !info.SecretsPathUnknown && info.CommonSecretsFile != "" {
+				secretFiles[info.CommonSecretsFile] = true
+			}
+		}
 	}
 	for _, path := range sortedSecretFiles(secretFiles) {
 		if !g.Tracked(path) {
@@ -237,7 +236,9 @@ func readyCommand(e *Env, args []string) error {
 			continue
 		}
 		for _, line := range lines {
-			if line.Kind == "command" || line.Kind == "interpolated" {
+			if line.Kind == "unknown" {
+				add("unknown", "%s: secret %s has unsupported quoted or multiline syntax; its provider remains unverified", path, line.Name)
+			} else if line.Kind == "command" || line.Kind == "interpolated" {
 				add("warn", "%s: tracked secrets entry %s depends on a command or other variables; review runner availability and prefer CI environment lookup (value not shown)", path, line.Name)
 			}
 		}
@@ -355,4 +356,91 @@ func sortedSecretFiles(files map[string]bool) []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+// requiredSecretChecks compares actual Kamal inputs with explicit providers, not
+// with the export list of a newly inferred registry policy. File values stay out
+// of diagnostics; arbitrary command/interpolation providers remain unverified.
+func requiredSecretChecks(root string, cfg *config.Config, u config.Unit, info discover.UnitInfo, add func(string, string, ...any)) {
+	g := gitx.Git{Dir: root}
+	providers := map[string]string{}
+	var paths []string
+	if !info.SecretsPathUnknown && info.CommonSecretsFile != "" {
+		paths = append(paths, info.CommonSecretsFile)
+	}
+	if !info.SecretsPathUnknown && info.SecretsFile == u.SecretsFile && !u.WriteSecretsFile {
+		paths = append(paths, u.SecretsFile)
+	}
+	for _, path := range paths {
+		if !g.Tracked(path) {
+			continue
+		}
+		lines, err := discover.ReadSecretNames(filepath.Join(root, path))
+		if err != nil {
+			continue
+		} // The shared file checks report unreadable selected files.
+		for _, line := range lines {
+			providers[line.Name] = line.Kind
+		}
+	}
+	if !info.SecretsPathUnknown && info.SecretsFile == u.SecretsFile && u.WriteSecretsFile {
+		// The selected file loads after common and replaces same-name providers.
+		for _, name := range generate.KamalSecretFileVariables(u) {
+			providers[name] = "env"
+		}
+	}
+
+	required := append([]string(nil), info.RequiredSecrets...)
+	// Self-referencing entries also consume CI exports, even if used by hooks
+	// rather than listed directly in the Kamal environment.
+	for name, kind := range providers {
+		if kind == "env" && !slices.Contains(required, name) {
+			required = append(required, name)
+		}
+	}
+	sort.Strings(required)
+	for _, name := range required {
+		_, hasEntry := providers[name]
+		if slices.Contains(info.RequiredSecrets, name) && !hasEntry {
+			if info.SecretsPathUnknown {
+				add("unknown", "%s: secrets-file entry for %s remains unverified because secrets_path is unresolved", u.ID, name)
+			} else {
+				add("fail", "%s: newly discovered secret %s has no tracked or generated secrets-file entry; environment export alone cannot satisfy a YAML secret lookup", u.ID, name)
+			}
+			continue
+		}
+		if providers[name] == "env" && (slices.Contains(generate.KamalProvidedVariables(cfg, u), name) || slices.Contains(u.Secrets, name)) {
+			continue
+		}
+
+		if providers[name] == "env" && ambientRunnerInput(name) {
+			add("unknown", "%s: %s references ambient runner context; availability is not verified by the reviewed app-secret exports", u.ID, name)
+			continue
+		}
+		switch providers[name] {
+		case "literal":
+			continue
+		case "command", "interpolated", "unknown":
+			add("unknown", "%s: secret %s uses an unresolved file provider (command, interpolation or unsupported syntax); its runner provider remains unverified", u.ID, name)
+		default:
+			if info.SecretsPathUnknown {
+				add("unknown", "%s: provider for secret %s remains unverified because secrets_path is unresolved", u.ID, name)
+			} else {
+				add("fail", "%s: newly discovered secret %s is not exported by the reviewed plan or supplied by a tracked literal; explicitly reconcile required secrets", u.ID, name)
+			}
+		}
+	}
+}
+
+// Namespace membership suggests an ambient provider, not proof that any
+// particular variable exists. Keep it unknown instead of inventing a secret.
+func ambientRunnerInput(name string) bool {
+	if strings.HasPrefix(name, "RUNNER_") || strings.HasPrefix(name, "GITHUB_") || strings.HasPrefix(name, "ACTIONS_") {
+		return true
+	}
+	switch name {
+	case "CI", "HOME", "PATH", "SHELL", "PWD", "TMPDIR":
+		return true
+	}
+	return false
 }

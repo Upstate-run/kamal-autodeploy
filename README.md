@@ -29,7 +29,7 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 ## Install
 
 ```sh
-go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.5
+go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.6
 ```
 
 Published releases also provide macOS/Linux binary archives and `checksums.txt`; use those when Go is not installed locally and verify the archive checksum before use. Go installs use the module proxy and checksum database. The generated workflow pins the reviewed tool version. See [the release configuration](.goreleaser.yaml).
@@ -44,7 +44,7 @@ kamal-autodeploy ready --direct-kamal
 kamal-autodeploy ready --offline --direct-kamal
 ```
 
-`ready` reuses static discovery to list CI gates, Kamal runtime, required secret names and deployment units. It checks effective wrapper commands/arguments, rejects empty SSH target lists, and checks that current Kamal hosts/ports and SSH user match the reviewed SSH settings without rewriting that plan. It rejects duplicate CI gate names, newly discovered secret names missing from the reviewed plan, and secrets-file tracking/ignore mismatches shared with doctor. It flags unresolved SSH targets, flags tracked secret commands (including `.kamal/secrets-common`), and identifies hooks and ERB whose local-file/environment dependencies need review. It never executes project code, secret commands, ERB or SSH, writes files, installs software, changes GitHub settings or dispatches workflows. Secret expressions and values are not printed. It prepares no app-specific edits: review those explicitly before using `init`.
+`ready` reuses static discovery to list CI gates, Kamal runtime, required secret names and deployment units. It checks effective wrapper commands/arguments, rejects empty SSH target lists, and checks that current Kamal hosts/ports and SSH user match the reviewed SSH settings without rewriting that plan. It rejects duplicate CI gate names, required inputs missing from reviewed exports or known tracked file providers, and secrets-file tracking/ignore mismatches shared with doctor. It flags unresolved SSH targets, flags tracked secret commands (including `.kamal/secrets-common`), and identifies hooks and ERB whose local-file/environment dependencies need review. It never executes project code, secret commands, ERB or SSH, writes files, installs software, changes GitHub settings or dispatches workflows. Required Kamal inputs are checked before inferred registry-policy filtering. YAML secret lookups require a tracked or generated file entry as well as any backing environment export. Hook-only environment inputs do not require file entries. A tracked literal can supply an input without a CI export; command/interpolated providers and dynamic registry servers remain explicitly unverified. Ignored laptop files are not accepted as runner providers. Secret expressions and values are not printed. It prepares no app-specific edits: review those explicitly before using `init`.
 
 With GitHub access it reuses doctor's checks for environment protections, secret presence and host pins. Missing **or inaccessible** environments are reported without assuming which caused the failure. GHCR metadata can establish package linkage, but does not prove the workflow's write permission. Output links to package settings and asks you to verify **Manage Actions access**; inherited permissions may already suffice. Add repository access only if missing. A failed metadata lookup never establishes that permission is absent.
 
