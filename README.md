@@ -42,7 +42,7 @@ kamal-autodeploy plan        # discovery + plan + file diff; writes nothing
 kamal-autodeploy init        # writes .kamal-autodeploy.yml and the workflow after a yes
 git add .kamal-autodeploy.yml .github/workflows/kamal-autodeploy.yml
 git commit -m "Deploy merged changes with kamal-autodeploy"
-kamal-autodeploy provision   # environments, CI SSH key, pinned host keys, secrets (via gh)
+kamal-autodeploy provision   # GitHub setup; then execute its printed public-key authorization command
 kamal-autodeploy doctor      # local + GitHub checks
 kamal-autodeploy doctor --remote --unit <id>   # SSH test from a real GitHub runner (asks first)
 git push                     # the next green CI run on main deploys what changed
@@ -117,6 +117,15 @@ With the Upstate CLI, `upstate deploy <unit>` and `upstate rollback <unit> <vers
 
 ## SSH and secrets
 
+There are two separate SSH trust steps, and both are required:
+
+| Item | What it proves | Where it belongs |
+| --- | --- | --- |
+| Server host-key fingerprint | The runner reached the intended server | Pinned host keys in the GitHub environment |
+| Generated CI public key | The runner may log in as the configured SSH user | That user's `~/.ssh/authorized_keys` on every target |
+
+`provision` generates the CI pair and uploads its private half to GitHub. It **does not install the public half on the server**: execute the printed authorization command through an existing trusted SSH connection. Keep existing authorized keys. Supplying `--host-fingerprint` completes only the first row. Local `doctor` checks secret presence and host pins; only a successful remote doctor establishes runner login access. The remote doctor requires this workflow to exist on the default branch, so arrange the initial onboarding deployment/approval accordingly. If an existing CI secret is kept, its original public key must still be installed; the tool cannot recover it from GitHub's write-only secret store. A missing original public key needs an intentional paired-key replacement, not a host-pin bypass.
+
 `kamal-autodeploy provision` does this through your own `gh`, with a yes before each change. The same steps by hand:
 
 1. **Environment** per unit (`production-rails`), deployable from `main` only. Add required reviewers if you want a manual gate; the deploy job honours them.
@@ -189,3 +198,13 @@ comments never determine which config a wrapper executes. SSH ports must be lite
 Suppression of a previously failed automatic attempt returns a blocking guard error: the unit job remains failed and its dependants cannot deploy. It creates no new deployment record and does not run Kamal. Regression coverage includes two reconciliation runs after a shared-schema predecessor failure.
 
 Executable wrappers must begin with a plain supported Ruby or shell shebang. Interpreter options and alternate loader programs are rejected before host pins are approved.
+
+### First repository onboarding checks
+
+Before the first production run:
+
+- Authorize the generated CI public key for the configured SSH user on every target, separately from verifying server host fingerprints. Require remote doctor to pass once the workflow is on the default branch.
+- Review the **committed** `.upstate/*.json` mapping when enabling receipts. Its environment ID and origin must match the configured hook environment and origin. A correct local mapping that was not committed cannot configure a fresh runner; hook credentials deliberately refuse mismatched environments.
+- Review both `.kamal/secrets` and `.kamal/secrets-common` for laptop-only credential commands. A fresh runner cannot use credentials stored only in the developer's local Upstate machine store. Remove obsolete observer lookups only after confirming they are no longer needed by the app's deployment topology.
+- Preserve a supported Kamal local registry/remote builder setup rather than switching registries solely for CI. Exclude runner dependency caches such as `vendor/bundle/` from the Docker context when applicable.
+- After the first green deployment, verify an Upstate receipt for that exact deployed version and timestamp. An older verified receipt is not evidence for the new deployment. A successful Kamal job alone does not establish hook delivery, notification delivery, or independent production verification. If hooks fail open, investigate their reporting status separately.

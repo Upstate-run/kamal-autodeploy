@@ -83,7 +83,7 @@ func provisionCommand(e *Env, args []string) error {
 			return fmt.Errorf("%s: %w", u.ID, err)
 		}
 	}
-	fmt.Fprintln(e.Out, "\nDone. Run kamal-autodeploy doctor, then kamal-autodeploy doctor --remote --unit <id> to test SSH from a real runner.")
+	fmt.Fprintln(e.Out, "\nGitHub provisioning finished. Server login authorization is NOT verified. Install the printed CI public key on each host, then run kamal-autodeploy doctor and kamal-autodeploy doctor --remote --unit <id> before enabling automatic deploys. The remote check needs the workflow on the default branch.")
 	return nil
 }
 
@@ -225,8 +225,12 @@ func (p *provisioner) allowOverwrite(name string, exists bool) (bool, error) {
 
 func (p *provisioner) sshKey(u config.Unit, secrets map[string]bool) error {
 	ok, err := p.allowOverwrite(generate.SSHKeySecret, secrets[generate.SSHKeySecret])
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		fmt.Fprintln(p.e.Out, "  An existing GitHub CI key does not prove server access. Its matching public key must be authorized for the configured SSH user; verify with doctor --remote.")
+		return nil
 	}
 	if err := p.e.Runner.LookPath("ssh-keygen"); err != nil {
 		return errors.New("ssh-keygen is required")
@@ -262,9 +266,9 @@ func (p *provisioner) sshKey(u config.Unit, secrets map[string]bool) error {
 	}
 	pub := strings.TrimSpace(string(public))
 	fmt.Fprintf(p.e.Out, "  stored %s. The private key is deleted locally now.\n", generate.SSHKeySecret)
-	fmt.Fprintf(p.e.Out, "  Authorize the public key yourself on each host (this tool never SSHes for you):\n    %s\n", pub)
+	fmt.Fprintf(p.e.Out, "  REQUIRED SERVER STEP: authorize this CI public key for the configured SSH user on every host. The server fingerprint does NOT authorize CI login. This tool never SSHes for you:\n    %s\n", pub)
 	for _, h := range u.SSH.Hosts {
-		fmt.Fprintf(p.e.Out, "    echo %s | ssh -p %d %s@%s 'umask 077; mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys'\n", shellQuote(pub), u.SSH.Port, u.SSH.User, h)
+		fmt.Fprintf(p.e.Out, "    echo %s | ssh -o StrictHostKeyChecking=yes -p %d %s@%s 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && cat >> ~/.ssh/authorized_keys'\n", shellQuote(pub), u.SSH.Port, u.SSH.User, h)
 	}
 	fmt.Fprintln(p.e.Out, "  Prefer a dedicated deploy user. Membership in the docker group is effectively root on that host.")
 	return nil
