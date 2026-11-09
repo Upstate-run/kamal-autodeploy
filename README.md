@@ -29,7 +29,7 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 ## Install
 
 ```sh
-go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.6
+go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.7
 ```
 
 Published releases also provide macOS/Linux binary archives and `checksums.txt`; use those when Go is not installed locally and verify the archive checksum before use. Go installs use the module proxy and checksum database. The generated workflow pins the reviewed tool version. See [the release configuration](.goreleaser.yaml).
@@ -180,7 +180,7 @@ kamal-autodeploy init --upstate-cli 0.2.13   # pins the upstate CLI version + SH
 kamal-autodeploy provision                   # offers to store the environment's hook token (interactive yes only)
 ```
 
-The hook token is Upstate's own report-only credential, scoped to one environment and revocable; no SSH key or app secret reaches Upstate. It is piped from `upstate credential hook` straight into `gh secret set UPSTATE_HOOK_TOKEN`, and `UPSTATE_HOOK_ENVIRONMENT`/`UPSTATE_URL` become environment variables. The deploy job then installs the pinned, checksum-verified CLI. Everything here is skippable: without it, the hooks print one line and the deploy continues, and Upstate sees deploys only as observed version changes. Upstate being down never stops a deploy.
+The hook token is Upstate's own report-only credential, scoped to one environment and revocable; no SSH key or app secret reaches Upstate. It is piped from `upstate credential hook` straight into `gh secret set UPSTATE_HOOK_TOKEN`, and `UPSTATE_HOOK_ENVIRONMENT`/`UPSTATE_URL` become environment variables. The deploy job then installs the pinned, checksum-verified CLI. Optional installation has a bounded download timeout and is non-blocking: failure warns and removes the temporary install directory without adding it to PATH. Kamal deploy/rollback and host verification stay strict. Everything here is skippable: without it, the hooks print one line and the deploy continues, and Upstate sees deploys only as observed version changes. Upstate being down never stops a deploy.
 
 ## Private hosts
 

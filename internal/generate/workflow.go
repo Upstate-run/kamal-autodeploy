@@ -440,6 +440,7 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 
 	if c.Upstate != nil {
 		w.l(6, "- name: Install upstate CLI %s for Upstate receipts (optional; skipped without the variable)", c.Upstate.CLIVersion)
+		w.l(8, "continue-on-error: true")
 		w.l(8, "if: ${{ %s && vars.%s != '' }}", kamalRuns, UpstateEnvVar)
 		w.l(8, "env:")
 		w.l(10, "UPSTATE_CLI_VERSION: %s", quote(c.Upstate.CLIVersion))
@@ -448,11 +449,12 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 		for _, s := range []string{
 			`set -euo pipefail`,
 			`archive="upstate_${UPSTATE_CLI_VERSION}_linux_amd64.tar.gz"`,
-			`dir="$RUNNER_TEMP/upstate-cli"`,
-			`mkdir -p "$dir"`,
-			`curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --max-redirs 5 -o "$dir/$archive" "https://github.com/Upstate-run/cli-releases/releases/download/v${UPSTATE_CLI_VERSION}/${archive}"`,
+			`dir="$(mktemp -d "$RUNNER_TEMP/upstate-cli.XXXXXX")"`,
+			`trap 'status=$?; if [ "$status" -ne 0 ]; then rm -rf -- "$dir"; echo "::warning::Upstate CLI installation failed; deployment continues without receipts."; fi' EXIT`,
+			`curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --max-redirs 5 --connect-timeout 5 --max-time 30 -o "$dir/$archive" "https://github.com/Upstate-run/cli-releases/releases/download/v${UPSTATE_CLI_VERSION}/${archive}"`,
 			`echo "${UPSTATE_CLI_SHA256}  $dir/$archive" | sha256sum --check --strict -`,
 			`tar -xzf "$dir/$archive" -C "$dir" upstate`,
+			`if [ ! -f "$dir/upstate" ] || [ -L "$dir/upstate" ] || [ ! -x "$dir/upstate" ]; then echo "::error::Upstate archive has no regular executable binary"; exit 1; fi`,
 			`echo "$dir" >> "$GITHUB_PATH"`,
 		} {
 			w.l(10, "%s", s)
