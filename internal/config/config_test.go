@@ -228,3 +228,44 @@ func TestActivationRequiresCompatibleRuntimePin(t *testing.T) {
 		}
 	}
 }
+
+func TestTailscaleValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, version, tags string
+		ok                  bool
+	}{
+		{"old runtime", "v0.1.7", "[tag:deploy]", false},
+		{"release", "v0.1.8", "[tag:deploy]", true},
+		{"source", strings.Repeat("a", 40), "[tag:deploy]", true},
+		{"empty", "v0.1.8", "[]", false},
+		{"duplicate", "v0.1.8", "[tag:deploy, tag:deploy]", false},
+		{"expression", "v0.1.8", "['tag:${{ github.token }}']", false},
+		{"comma injection", "v0.1.8", "['tag:deploy,tag:admin']", false},
+		{"missing prefix", "v0.1.8", "[deploy]", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(valid, "tool_version: v0.1.0", "tool_version: "+tc.version, 1)
+			raw = strings.ReplaceAll(raw, "203.0.113.10", "100.101.102.103")
+			raw += "    tailscale:\n      tags: " + tc.tags + "\n"
+			_, err := Parse([]byte(raw))
+			if (err == nil) != tc.ok {
+				t.Fatalf("got %v, valid=%v", err, tc.ok)
+			}
+		})
+	}
+}
+
+func TestTailscaleRejectsPublicAndLocalTargets(t *testing.T) {
+	for _, host := range []string{"203.0.113.10", "127.0.0.1", "10.0.0.1", "localhost", "server.local", "100.101.102.103", "server.example.ts.net"} {
+		c, err := Parse([]byte(valid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.ToolVersion = "v0.1.8"
+		c.Units[0].Tailscale = &Tailscale{Tags: []string{"tag:deploy"}}
+		c.Units[0].SSH.Hosts = []string{host}
+		if (c.Validate() == nil) != TailscaleHost(host) {
+			t.Fatalf("unexpected target acceptance: %s", host)
+		}
+	}
+}

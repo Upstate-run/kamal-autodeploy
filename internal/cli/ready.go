@@ -133,6 +133,9 @@ func readyCommand(e *Env, args []string) error {
 		add("fail", "at least one configured CI gate must run on every push to %s", cfg.Branch)
 	}
 	for _, u := range cfg.Units {
+		if u.Tailscale != nil {
+			add("info", "%s: runner joins Tailscale with OIDC (%s); local provisioning needs tailnet connectivity; SSH keys and host pins are still required", u.ID, strings.Join(u.Tailscale.Tags, ", "))
+		}
 		add("info", "%s → environment %s\n        config: %s\n        runtime: %s\n        SSH: %s@%s (port %d)\n        required app secret names: %s", u.ID, u.Environment, u.Config, kamalLabel(u), u.SSH.User, strings.Join(u.SSH.Hosts, ", "), u.SSH.Port, orNone(strings.Join(u.Secrets, ", ")))
 		if u.Command == "kamal" {
 			if !config.MatchDirectArgs(u.Config, u.Destination, u.Args) {
@@ -199,7 +202,7 @@ func readyCommand(e *Env, args []string) error {
 					add(level, "%s: %s", u.ID, issue.Text)
 				}
 			}
-			if len(info.PrivateHosts) > 0 {
+			if len(info.PrivateHosts) > 0 && u.Tailscale == nil {
 				add("fail", "%s: private SSH targets need runner networking that the generated workflow does not configure", u.ID)
 			}
 			if info.Dynamic {

@@ -17,6 +17,7 @@ import (
 // when this version of the generator was cut; the comment names the release.
 const (
 	CheckoutAction  = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+	TailscaleAction = "tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf # v4.3.0"
 	SetupGoAction   = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0"
 	SetupRubyAction = "ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # Ruby 3.4.12 support"
 	GoVersion       = "1.27.3"
@@ -27,12 +28,14 @@ const (
 
 // Names of the per-environment secret and variable the workflow reads for SSH.
 const (
-	SSHKeySecret      = "KAMAL_AUTODEPLOY_SSH_KEY"
-	KnownHostsVar     = "KAMAL_AUTODEPLOY_KNOWN_HOSTS"
-	UpstateToken      = "UPSTATE_HOOK_TOKEN"
-	UpstateEnvVar     = "UPSTATE_HOOK_ENVIRONMENT"
-	UpstateURLVar     = "UPSTATE_URL"
-	ConcurrencyPrefix = "kamal-autodeploy"
+	SSHKeySecret         = "KAMAL_AUTODEPLOY_SSH_KEY"
+	TailscaleClientIDVar = "KAMAL_AUTODEPLOY_TAILSCALE_CLIENT_ID"
+	TailscaleAudienceVar = "KAMAL_AUTODEPLOY_TAILSCALE_AUDIENCE"
+	KnownHostsVar        = "KAMAL_AUTODEPLOY_KNOWN_HOSTS"
+	UpstateToken         = "UPSTATE_HOOK_TOKEN"
+	UpstateEnvVar        = "UPSTATE_HOOK_ENVIRONMENT"
+	UpstateURLVar        = "UPSTATE_URL"
+	ConcurrencyPrefix    = "kamal-autodeploy"
 )
 
 const (
@@ -337,6 +340,9 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 	if u.RegistryPassword == config.RegistryGitHubToken {
 		w.l(6, "packages: write")
 	}
+	if u.Tailscale != nil {
+		w.l(6, "id-token: write")
+	}
 	w.l(4, "env:")
 	w.l(6, "ACTION: ${{ needs.select.outputs.%s_action }}", k)
 	w.l(6, "DEPLOY_SHA: ${{ needs.select.outputs.%s_sha }}", k)
@@ -378,6 +384,22 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 		w.l(6, "- name: Install kamal %s", u.KamalVersion)
 		w.l(8, "if: ${{ %s }}", kamalRuns)
 		w.l(8, "run: gem install kamal -v %s --no-document", shellQuote(u.KamalVersion))
+	}
+
+	if u.Tailscale != nil {
+		w.l(6, "- name: Authorize ephemeral Tailscale node (OIDC, file-only key)")
+		w.l(8, "id: tailscale-key")
+		w.l(8, "if: ${{ %s }}", proceed)
+		w.l(8, "env:")
+		w.l(10, "TS_CLIENT_ID: ${{ vars.%s }}", TailscaleClientIDVar)
+		w.l(10, "TS_AUDIENCE: ${{ vars.%s }}", TailscaleAudienceVar)
+		w.l(8, "run: kamal-autodeploy tailscale-key --tags %s", shellQuote(strings.Join(u.Tailscale.Tags, ",")))
+		w.l(6, "- name: Connect to Tailscale (ephemeral OIDC identity)")
+		w.l(8, "if: ${{ %s }}", proceed)
+		w.l(8, "uses: %s", TailscaleAction)
+		w.l(8, "with:")
+		w.l(10, "authkey: file:${{ steps.tailscale-key.outputs.authkey_path }}")
+		w.l(10, "ping: %s", quote(strings.Join(u.SSH.Hosts, ",")))
 	}
 
 	w.l(6, "- name: SSH with the dedicated CI key and pinned host keys")
@@ -469,7 +491,11 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 	for _, arg := range u.Args {
 		verifyArgs += " " + shellQuote(arg)
 	}
-	w.l(8, "run: kamal-autodeploy verify-hosts --config %s --destination %s --command %s --%s", shellQuote(u.Config), shellQuote(u.Destination), shellQuote(u.Command), verifyArgs)
+	transportArg := ""
+	if u.Tailscale != nil {
+		transportArg = " --require-tailscale"
+	}
+	w.l(8, "run: kamal-autodeploy verify-hosts --config %s --destination %s --command %s%s --%s", shellQuote(u.Config), shellQuote(u.Destination), shellQuote(u.Command), transportArg, verifyArgs)
 
 	w.l(6, "- name: Run Kamal (%s)", u.Command)
 	w.l(8, "id: kamal")
@@ -524,7 +550,14 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 
 	w.l(6, "- name: Clean up")
 	w.l(8, "if: ${{ always() }}")
+	if u.Tailscale != nil {
+		w.l(8, "env:")
+		w.l(10, "TS_AUTHKEY_FILE: ${{ steps.tailscale-key.outputs.authkey_path }}")
+	}
 	w.l(8, "run: |")
+	if u.Tailscale != nil {
+		w.l(10, `if [ -n "${TS_AUTHKEY_FILE:-}" ]; then rm -f -- "$TS_AUTHKEY_FILE"; rmdir -- "$(dirname -- "$TS_AUTHKEY_FILE")"; fi`)
+	}
 	w.l(10, `if [ -n "${SSH_AGENT_PID:-}" ]; then ssh-agent -k > /dev/null || true; fi`)
 	w.l(10, "rm -f ~/.ssh/known_hosts ~/.ssh/config")
 	if u.WriteSecretsFile {

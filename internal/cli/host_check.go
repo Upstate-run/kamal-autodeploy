@@ -16,6 +16,7 @@ func verifyHostsCommand(e *Env, args []string) error {
 	f := newFlags("verify-hosts")
 	configPath := f.String("config", "", "")
 	command := f.String("command", "", "")
+	requireTailscale := f.Bool("require-tailscale", false, "")
 	destination := f.String("destination", "", "")
 	if err := f.Parse(args); err != nil {
 		return errors.New("usage: kamal-autodeploy verify-hosts")
@@ -64,6 +65,9 @@ func verifyHostsCommand(e *Env, args []string) error {
 			return errors.New("selected checkout has no static SSH targets")
 		}
 		for _, host := range unit.SSH.Hosts {
+			if *requireTailscale && !config.TailscaleHost(host) {
+				return fmt.Errorf("selected checkout target %s is not a direct tailnet peer; refusing public SSH fallback", host)
+			}
 			if !knownHostsCovers(e.Getenv("KNOWN_HOSTS"), host, unit.SSH.Port) {
 				return fmt.Errorf("selected checkout target %s is not pinned; refusing deployment", host)
 			}

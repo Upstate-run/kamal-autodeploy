@@ -118,6 +118,8 @@ func Run(e *Env, args []string) error {
 		return selectCommand(e, args[1:])
 	case "guard":
 		return guardCommand(e, args[1:])
+	case "tailscale-key":
+		return tailscaleKeyCommand(e, args[1:])
 	case "verify-hosts":
 		return verifyHostsCommand(e, args[1:])
 	case "record":

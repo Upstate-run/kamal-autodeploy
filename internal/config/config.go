@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path"
 	"regexp"
@@ -96,13 +97,20 @@ type Unit struct {
 	Paths       []string `yaml:"paths"`
 	// SecretsFile is the Kamal secrets file. WriteSecretsFile is true when it is ignored by git
 	// and the workflow writes NAME=$NAME references into it; values come from environment secrets.
-	SecretsFile      string   `yaml:"secrets_file"`
-	WriteSecretsFile bool     `yaml:"write_secrets_file"`
-	Secrets          []string `yaml:"secrets,omitempty"`
-	RegistryPassword string   `yaml:"registry_password"`
-	Kamal            string   `yaml:"kamal"`
-	KamalVersion     string   `yaml:"kamal_version,omitempty"`
-	SSH              SSH      `yaml:"ssh"`
+	SecretsFile      string     `yaml:"secrets_file"`
+	WriteSecretsFile bool       `yaml:"write_secrets_file"`
+	Secrets          []string   `yaml:"secrets,omitempty"`
+	RegistryPassword string     `yaml:"registry_password"`
+	Kamal            string     `yaml:"kamal"`
+	KamalVersion     string     `yaml:"kamal_version,omitempty"`
+	SSH              SSH        `yaml:"ssh"`
+	Tailscale        *Tailscale `yaml:"tailscale,omitempty"`
+}
+
+// Tailscale opts one unit into ephemeral GitHub OIDC networking. Identity values
+// live in its protected GitHub environment; SSH authentication remains unchanged.
+type Tailscale struct {
+	Tags []string `yaml:"tags"`
 }
 
 type SSH struct {
@@ -119,6 +127,7 @@ type Upstate struct {
 }
 
 var (
+	tagPattern       = regexp.MustCompile(`^tag:[a-z][a-z0-9-]{0,39}$`)
 	idPattern        = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 	envPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 	tokenPattern     = regexp.MustCompile(`^[A-Za-z0-9_./=:@+,-]+$`)
@@ -219,6 +228,31 @@ func SupportsActivationVersion(version string) bool {
 		return false
 	}
 	return major > 0 || (major == 0 && (minor > 1 || (minor == 1 && patch >= 4)))
+}
+
+// TailscaleHost accepts direct tailnet peers; subnet routing and public fallback
+// are deliberately outside this transport option.
+func TailscaleHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		_, network, _ := net.ParseCIDR("100.64.0.0/10")
+		return network.Contains(ip)
+	}
+	return strings.HasSuffix(strings.ToLower(host), ".ts.net")
+}
+
+func supportsTailscaleVersion(version string) bool {
+	if sourceSHAPattern.MatchString(version) {
+		return true
+	}
+	base := strings.SplitN(strings.TrimPrefix(version, "v"), "-", 2)[0]
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	major, e1 := strconv.Atoi(parts[0])
+	minor, e2 := strconv.Atoi(parts[1])
+	patch, e3 := strconv.Atoi(parts[2])
+	return e1 == nil && e2 == nil && e3 == nil && (major > 0 || minor > 1 || (minor == 1 && patch >= 8))
 }
 
 func (c *Config) Validate() error {
@@ -369,10 +403,28 @@ func (c *Config) Validate() error {
 		if u.SSH.Port < 1 || u.SSH.Port > 65535 {
 			return fmt.Errorf("unit %s: ssh.port must be 1-65535", u.ID)
 		}
+		if u.Tailscale != nil {
+			if !supportsTailscaleVersion(c.ToolVersion) {
+				return fmt.Errorf("unit %s: tailscale requires tool_version v0.1.8 or newer, or an exact compatible source SHA", u.ID)
+			}
+			if len(u.Tailscale.Tags) == 0 {
+				return fmt.Errorf("unit %s: tailscale.tags must contain at least one tag", u.ID)
+			}
+			seenTags := map[string]bool{}
+			for _, tag := range u.Tailscale.Tags {
+				if !tagPattern.MatchString(tag) || seenTags[tag] {
+					return fmt.Errorf("unit %s: tailscale tag %q must be unique and have form tag:lowercase-name (maximum 40 characters after tag:)", u.ID, tag)
+				}
+				seenTags[tag] = true
+			}
+		}
 		if len(u.SSH.Hosts) == 0 {
 			return fmt.Errorf("unit %s: ssh.hosts must list every host so their keys can be pinned", u.ID)
 		}
 		for _, h := range u.SSH.Hosts {
+			if u.Tailscale != nil && !TailscaleHost(h) {
+				return fmt.Errorf("unit %s: tailscale ssh.hosts must use direct tailnet IPv4 addresses or full .ts.net names", u.ID)
+			}
 			if !hostPattern.MatchString(h) || strings.HasPrefix(h, "-") {
 				return fmt.Errorf("unit %s: host %q is invalid", u.ID, h)
 			}

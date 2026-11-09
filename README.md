@@ -29,7 +29,7 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 ## Install
 
 ```sh
-go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.7
+go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.8
 ```
 
 Published releases also provide macOS/Linux binary archives and `checksums.txt`; use those when Go is not installed locally and verify the archive checksum before use. Go installs use the module proxy and checksum database. The generated workflow pins the reviewed tool version. See [the release configuration](.goreleaser.yaml).
@@ -184,13 +184,13 @@ The hook token is Upstate's own report-only credential, scoped to one environmen
 
 ## Private hosts
 
-GitHub-hosted runners reach only public addresses. Hosts that look private (RFC 1918, `100.64.0.0/10` as used by Tailscale, `.ts.net`, `.local`, `.internal`, single-label names) are reported as unsupported. Options: expose SSH on a public address restricted to [GitHub's runner ranges](https://api.github.com/meta), use a bastion (not supported by the generated workflow yet), or run your own runner with network access (not recommended on the production host itself, and not generated). VPN/OIDC integration is out of scope for v1.
+GitHub-hosted runners need an explicit network connection to reach private hosts. For direct Tailscale peers, configure the optional [Tailscale OIDC integration](docs/tailscale.md) (v0.1.8+); public SSH can remain closed. Discovery does not assume tailnet authorization: review `tailscale.tags` and the target addresses before regenerating. Other private networks, subnet routers, bastions and custom runners are not configured by this generator.
 
 ## Supported and unsupported shapes
 
 Supported: `config/deploy.yml` (or `deploy.yml`), destination overlays (`deploy.<dest>.yml`, one unit each), several standalone configs (`deploy.rails.yml`, `deploy.edge.yml`) with or without wrapper scripts, custom `secrets_path`, builder contexts and Dockerfiles, shared hosts and proxies, GHCR, Docker Hub and other registries with a password, bundler or gem Kamal.
 
-Not supported yet (reported by `plan`): `ssh.proxy` jump hosts, private-network hosts, hosts or service names only known through ERB, CI workflows that are all path-filtered, a deploy branch that is not the default branch, more than one generated workflow per repository. A wrapper that also needs `-d` is flagged for review. Kamal hooks run as in any Kamal deploy; Kamal's own SSH settings (`ssh.keys`, `ssh.config`) are yours to keep consistent with the CI key.
+Not supported yet (reported by `plan`): `ssh.proxy` jump hosts, private-network hosts without the explicit Tailscale integration, hosts or service names only known through ERB, CI workflows that are all path-filtered, a deploy branch that is not the default branch, more than one generated workflow per repository. A wrapper that also needs `-d` is flagged for review. Kamal hooks run as in any Kamal deploy; Kamal's own SSH settings (`ssh.keys`, `ssh.config`) are yours to keep consistent with the CI key.
 
 ## Examples
 
@@ -242,3 +242,7 @@ Before the first production run:
 - Review both `.kamal/secrets` and `.kamal/secrets-common` for laptop-only credential commands. A fresh runner cannot use credentials stored only in the developer's local Upstate machine store. Remove obsolete observer lookups only after confirming they are no longer needed by the app's deployment topology.
 - Preserve a supported Kamal local registry/remote builder setup rather than switching registries solely for CI. Exclude runner dependency caches such as `vendor/bundle/` from the Docker context when applicable.
 - After the first green deployment, verify an Upstate receipt for that exact deployed version and timestamp. An older verified receipt is not evidence for the new deployment. A successful Kamal job alone does not establish hook delivery, notification delivery, or independent production verification. If hooks fail open, investigate their reporting status separately.
+
+### Private SSH over Tailscale
+
+Deployment and remote-doctor jobs can optionally join a tailnet with ephemeral GitHub OIDC identities, allowing public SSH to stay closed. Configure `tailscale.tags` per unit and use its Tailscale address in both Kamal and `ssh.hosts`. Dedicated SSH keys and pinned host keys remain required. See [Tailscale setup](docs/tailscale.md) for environment identities, least-privilege network policy, firewall rules and first-deployment checks (v0.1.8+).

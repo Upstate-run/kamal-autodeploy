@@ -170,3 +170,75 @@ cp "$ARCHIVE_FIXTURE" "$output"
 		})
 	}
 }
+
+func TestTailscaleIsScopedAndMandatory(t *testing.T) {
+	cfg, err := config.Load("../../examples/two-config/reviewed/.kamal-autodeploy.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ToolVersion = "v0.1.8"
+	cfg.Units[0].SSH.Hosts = []string{"100.101.102.103"}
+	cfg.Units[0].Tailscale = &config.Tailscale{Tags: []string{"tag:deploy"}}
+	raw, err := Workflow(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tree map[string]any
+	if err := yaml.Unmarshal(raw, &tree); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range tree["jobs"].(map[string]any) {
+		job := value.(map[string]any)
+		perms := job["permissions"].(map[string]any)
+		enabled := name == "deploy-"+cfg.Units[0].ID
+		if (perms["id-token"] == "write") != enabled {
+			t.Fatalf("OIDC permission leaked or missing in %s", name)
+		}
+		connect, ssh := -1, -1
+		for i, value := range job["steps"].([]any) {
+			step := value.(map[string]any)
+			if step["name"] == "Connect to Tailscale (ephemeral OIDC identity)" {
+				connect = i
+				if step["continue-on-error"] != nil {
+					t.Fatal("network must fail closed")
+				}
+				if step["if"] != "${{ steps.guard.outputs.proceed == 'true' }}" {
+					t.Fatal("doctor must connect too, only after guard")
+				}
+				with := step["with"].(map[string]any)
+				if with["ping"] != strings.Join(cfg.Units[0].SSH.Hosts, ",") || with["authkey"] != "file:${{ steps.tailscale-key.outputs.authkey_path }}" {
+					t.Fatal("wrong network targets")
+				}
+				if step["uses"] != strings.Fields(TailscaleAction)[0] {
+					t.Fatal("action must be pinned")
+				}
+			}
+			if step["name"] == "Verify selected checkout host pins" {
+				if strings.Contains(step["run"].(string), " --require-tailscale --") != enabled {
+					t.Fatal("selected-checkout transport requirement leaked or missing")
+				}
+			}
+			if step["name"] == "SSH with the dedicated CI key and pinned host keys" {
+				ssh = i
+			}
+		}
+		if enabled && (connect < 0 || ssh <= connect) {
+			t.Fatal("join must precede SSH")
+		}
+		if !enabled && connect >= 0 {
+			t.Fatal("network opt-in leaked")
+		}
+	}
+	if !strings.Contains(string(raw), "StrictHostKeyChecking yes") {
+		t.Fatal("lost host verification")
+	}
+	if bin, err := exec.LookPath("actionlint"); err == nil {
+		path := filepath.Join(t.TempDir(), "workflow.yml")
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(bin, "-shellcheck=", path).CombinedOutput(); err != nil {
+			t.Fatalf("actionlint: %s: %v", out, err)
+		}
+	}
+}

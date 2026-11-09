@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Upstate-run/kamal-autodeploy/internal/config"
 	"github.com/Upstate-run/kamal-autodeploy/internal/generate"
 )
 
@@ -295,6 +298,43 @@ func TestProvisionRejectsUnsafeEnvironmentBeforeSecrets(t *testing.T) {
 			}
 			if strings.Contains(f.argv(), "gh secret") || strings.Contains(f.argv(), "gh api -X PUT") {
 				t.Fatal("unsafe environment mutated or secrets accessed")
+			}
+		})
+	}
+}
+
+func TestDoctorRequiresTailscaleIdentityVariables(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprint(present), func(t *testing.T) {
+			dir := provisionRepo(t)
+			cfg, err := config.Load(filepath.Join(dir, config.FileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.ToolVersion = "v0.1.8"
+			cfg.Units[0].SSH.Hosts = []string{"100.101.102.103"}
+			cfg.Units[0].Tailscale = &config.Tailscale{Tags: []string{"tag:deploy"}}
+			raw, err := cfg.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, config.FileName), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			variables := []map[string]string{{"name": generate.KnownHostsVar, "value": "203.0.113.10 ssh-ed25519 AAAAHOSTKEY"}}
+			if present {
+				for _, name := range []string{generate.TailscaleClientIDVar, generate.TailscaleAudienceVar} {
+					variables = append(variables, map[string]string{"name": name, "value": "example-identifier"})
+				}
+			}
+			vars, _ := json.Marshal(variables)
+			f := &fakeRunner{envExists: true, secrets: `[{"name":"KAMAL_AUTODEPLOY_SSH_KEY"},{"name":"FIXTURE_RAILS_SECRET"},{"name":"FIXTURE_EDGE_SECRET"}]`, variables: string(vars)}
+			e, out := testEnv(dir)
+			e.Runner, e.Piper = f, f
+			_ = Run(e, []string{"doctor"})
+			missing := strings.Contains(out.String(), "missing Tailscale OIDC environment variable")
+			if missing == present {
+				t.Fatalf("present=%v: %s", present, out)
 			}
 		})
 	}

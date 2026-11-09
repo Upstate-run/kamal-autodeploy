@@ -196,6 +196,14 @@ func githubChecks(e *Env, cfg *config.Config, root string, add func(string, stri
 			}
 			vars, err := p.variables(u.Environment)
 			if err == nil {
+				if u.Tailscale != nil {
+					for _, name := range []string{generate.TailscaleClientIDVar, generate.TailscaleAudienceVar} {
+						if strings.TrimSpace(vars[name]) == "" {
+							add("fail", "%s: missing Tailscale OIDC environment variable %s; see docs/tailscale.md", u.ID, name)
+						}
+					}
+					add("info", "%s: Tailscale networking enabled; remote doctor verifies tailnet access and SSH login", u.ID)
+				}
 				var unpinned []string
 				for _, h := range u.SSH.Hosts {
 					if !knownHostsCovers(vars[generate.KnownHostsVar], h, u.SSH.Port) {

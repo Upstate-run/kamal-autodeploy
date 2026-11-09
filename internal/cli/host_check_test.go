@@ -154,3 +154,57 @@ func TestDirectKamalChecksDestinationOverlayHosts(t *testing.T) {
 		t.Fatal("destination argument mismatch accepted")
 	}
 }
+
+func TestSelectedCheckoutRequiresTailnetEvenWithPublicPins(t *testing.T) {
+	for _, command := range []string{"kamal", "bin/kamal"} {
+		for _, target := range []string{"198.51.100.20", "100.101.102.103", "server.example.ts.net"} {
+			t.Run(command+"/"+target, func(t *testing.T) {
+				dir := fixtureRepo(t, "simple", "git@github.com:acme/shop.git")
+				path := filepath.Join(dir, "config/deploy.yml")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), "198.51.100.20", target)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				e, _ := testEnv(dir)
+				e.Getenv = func(string) string { return target + " ssh-ed25519 AAAAHOSTKEY" }
+				args := []string{"verify-hosts", "--config", "config/deploy.yml", "--command", command, "--require-tailscale", "--"}
+				if command == "kamal" {
+					args = append(args, "-c", "config/deploy.yml")
+				}
+				err = Run(e, args)
+				if (err == nil) != (target != "198.51.100.20") {
+					t.Fatalf("transport check: %v", err)
+				}
+				// Public-mode jobs retain ordinary host-pin semantics.
+				if target == "198.51.100.20" {
+					args = append(args[:5], args[6:]...)
+					if err := Run(e, args); err != nil {
+						t.Fatalf("ordinary public job: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestTailnetRequirementChecksDestinationAndEveryRole(t *testing.T) {
+	dir := fixtureRepo(t, "simple", "git@github.com:acme/shop.git")
+	// An older selected destination mixes a private web target and a pinned public
+	// jobs target. Checking only the first role or the reviewed main plan is unsafe.
+	overlay := []byte("servers:\n  web: [100.101.102.103]\n  job:\n    hosts: [198.51.100.21]\n")
+	if err := os.WriteFile(filepath.Join(dir, "config/deploy.staging.yml"), overlay, 0600); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := testEnv(dir)
+	e.Getenv = func(string) string {
+		return "100.101.102.103 ssh-ed25519 AAAAHOSTKEY\n198.51.100.21 ssh-ed25519 AAAAHOSTKEY"
+	}
+	args := []string{"verify-hosts", "--config", "config/deploy.yml", "--destination", "staging", "--command", "kamal", "--require-tailscale", "--", "-c", "config/deploy.yml", "-d", "staging"}
+	err := Run(e, args)
+	if err == nil || !strings.Contains(err.Error(), "refusing public SSH fallback") {
+		t.Fatalf("public overlay accepted: %v", err)
+	}
+}

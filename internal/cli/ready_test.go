@@ -751,3 +751,42 @@ func TestReadyRequiresNewRegistryPasswordForReviewedNoAuthPolicy(t *testing.T) {
 		t.Fatal(out.String())
 	}
 }
+
+func TestReadyPrivatePeerNeedsExplicitTailscale(t *testing.T) {
+	dir := fixtureRepo(t, "simple", "git@github.com:acme/shop.git")
+	e, out := testEnv(dir)
+	if err := Run(e, []string{"init", "--yes", "--direct-kamal", "--tool-version", "v0.1.8"}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config/deploy.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.ReplaceAll(string(raw), "198.51.100.20", "100.101.102.103"))
+	if err := os.WriteFile(path, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(filepath.Join(dir, config.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Units[0].SSH.Hosts = []string{"100.101.102.103"}
+	for _, enabled := range []bool{false, true} {
+		if enabled {
+			cfg.Units[0].Tailscale = &config.Tailscale{Tags: []string{"tag:deploy"}}
+		}
+		data, err := cfg.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, config.FileName), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		err = Run(e, []string{"ready", "--offline"})
+		if (err == nil) != enabled {
+			t.Fatalf("Tailscale enabled=%v: %v\n%s", enabled, err, out)
+		}
+	}
+}
