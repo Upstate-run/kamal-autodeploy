@@ -118,6 +118,7 @@ func (w *world) run(event, trigger string, outcomes map[string]string, dispatch 
 			w.t.Fatalf("guard %s: %v", id, err)
 		}
 		if !g.Proceed {
+			failed[id] = g.Held
 			d.Action, d.Reason = ActionSkip, g.Reason
 			out[id] = d
 			continue

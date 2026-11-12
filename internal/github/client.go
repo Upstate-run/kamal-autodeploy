@@ -27,6 +27,8 @@ type Client struct {
 	HTTP    *http.Client
 }
 
+var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 func New(baseURL, token, repo string) (*Client, error) {
@@ -295,4 +297,34 @@ func (c *Client) BranchHead(branch string) (string, error) {
 		return "", errors.New("GitHub returned an invalid branch head")
 	}
 	return out.SHA, nil
+}
+
+// CommitMetadata supplies the immutable first-parent history for the deployment guard.
+type CommitMetadata struct {
+	SHA    string `json:"sha"`
+	Commit struct {
+		Message string `json:"message"`
+	} `json:"commit"`
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
+}
+
+func (c *Client) Commit(sha string) (CommitMetadata, error) {
+	var commit CommitMetadata
+	if !commitPattern.MatchString(sha) {
+		return commit, errors.New("invalid commit")
+	}
+	_, err := c.do("GET", "/repos/"+c.Repo+"/commits/"+sha, nil, &commit)
+	if err == nil && commit.SHA != sha {
+		err = errors.New("GitHub returned a different commit")
+	}
+	if err == nil {
+		for _, parent := range commit.Parents {
+			if !commitPattern.MatchString(parent.SHA) {
+				return commit, errors.New("GitHub returned an invalid commit parent")
+			}
+		}
+	}
+	return commit, err
 }

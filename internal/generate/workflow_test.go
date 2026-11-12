@@ -242,3 +242,71 @@ func TestTailscaleIsScopedAndMandatory(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewCannotReachDeployJobsOrSecrets(t *testing.T) {
+	cfg, err := config.Load("../../examples/two-config/reviewed/.kamal-autodeploy.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ToolVersion = "v0.1.9"
+	raw, err := Workflow(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tree map[string]any
+	if err := yaml.Unmarshal(raw, &tree); err != nil {
+		t.Fatal(err)
+	}
+	events := tree["on"].(map[string]any)["pull_request"].(map[string]any)["types"].([]any)
+	foundEdited := false
+	for _, event := range events {
+		foundEdited = foundEdited || event == "edited"
+	}
+	if !foundEdited {
+		t.Fatal("PR title/body edits must refresh the preview")
+	}
+	jobs := tree["jobs"].(map[string]any)
+	preview := jobs["preview"].(map[string]any)
+	perms := preview["permissions"].(map[string]any)
+	if len(perms) != 1 || perms["contents"] != "read" || preview["environment"] != nil {
+		t.Fatal("preview has privileged access")
+	}
+	previewYAML, _ := yaml.Marshal(preview)
+	for _, forbidden := range []string{"secrets.", "GITHUB_TOKEN", "pull_request_target", "bundle exec", "tailscale-key", "guard --", "deploy --"} {
+		if strings.Contains(string(previewYAML), forbidden) {
+			t.Fatalf("preview includes %s", forbidden)
+		}
+	}
+	if jobs["select"].(map[string]any)["if"] != "${{ github.event_name != 'pull_request' }}" {
+		t.Fatal("PR can enter deploy selection")
+	}
+	edge := jobs["deploy-"+cfg.Units[1].ID].(map[string]any)
+	if !strings.Contains(edge["if"].(string), "outputs.held != 'true'") {
+		t.Fatal("dependency can bypass a newly established hold")
+	}
+}
+
+func TestOlderToolPinKeepsCompatibleWorkflow(t *testing.T) {
+	cfg, err := config.Load("../../examples/two-config/reviewed/.kamal-autodeploy.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ToolVersion = "v0.1.9-0.20261110120000-abcdefabcdef"
+	raw, err := Workflow(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unsupported := range []string{"pull_request:", "preview --base", "outputs.held"} {
+		if strings.Contains(string(raw), unsupported) {
+			t.Fatalf("old pin emits %s", unsupported)
+		}
+	}
+	cfg.ToolVersion = "v0.1.9"
+	raw, err = Workflow(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "preview --base") {
+		t.Fatal("new pin lacks preview")
+	}
+}

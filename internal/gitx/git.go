@@ -26,6 +26,7 @@ type Repo interface {
 	ChangedFiles(from, to string) ([]string, error)
 	// FirstParents lists up to n commits on ref's first-parent chain, newest first.
 	FirstParents(ref string, n int) ([]string, error)
+	CommitMessage(sha string) (string, error)
 	// Head is the checked-out commit.
 	Head() (string, error)
 }
@@ -122,4 +123,36 @@ func (g Git) Ignored(path string) bool {
 	cmd := exec.Command("git", "check-ignore", "-q", "--no-index", "--", path)
 	cmd.Dir = g.Dir
 	return cmd.Run() == nil
+}
+
+// CommitMessage returns immutable commit metadata without invoking hooks.
+func (g Git) CommitMessage(sha string) (string, error) {
+	if !ValidSHA(sha) {
+		return "", errors.New("invalid commit")
+	}
+	return g.run("show", "-s", "--format=%B", sha, "--")
+}
+
+// FileAt reads a tracked file without checking out or executing that revision.
+func (g Git) FileAt(sha, path string) (string, error) {
+	if !ValidSHA(sha) {
+		return "", errors.New("invalid commit")
+	}
+	return g.run("show", sha+":"+path)
+}
+
+// MergeBase identifies the base of the changes introduced by a PR.
+func (g Git) MergeBase(base, head string) (string, error) {
+	if !ValidSHA(base) || !ValidSHA(head) {
+		return "", errors.New("invalid commit")
+	}
+	out, err := g.run("merge-base", base, head)
+	if err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(out)
+	if !ValidSHA(sha) {
+		return "", errors.New("merge base is not a commit")
+	}
+	return sha, nil
 }

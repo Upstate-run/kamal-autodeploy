@@ -176,7 +176,7 @@ func guardCommand(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	out := fmt.Sprintf("proceed=%t\n", res.Proceed)
+	out := fmt.Sprintf("proceed=%t\nheld=%t\n", res.Proceed, res.Held)
 	if res.DeploymentID != 0 {
 		out += fmt.Sprintf("deployment_id=%d\n", res.DeploymentID)
 	}

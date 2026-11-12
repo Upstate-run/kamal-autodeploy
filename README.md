@@ -17,6 +17,7 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 - [Readiness and onboarding output](#readiness-and-onboarding-output)
 - [Quick start](#quick-start)
 - [How a deploy is chosen](#how-a-deploy-is-chosen)
+- [Batch merges and PR previews](#batch-merges-and-pr-previews)
 - [Configuration](#configuration)
 - [Manual deploy and rollback](#manual-deploy-and-rollback)
 - [SSH and secrets](#ssh-and-secrets)
@@ -29,7 +30,7 @@ Works with [Upstate](https://upstate.cloud) for verified deploy receipts if you 
 ## Install
 
 ```sh
-go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v0.1.8
+go install github.com/Upstate-run/kamal-autodeploy/cmd/kamal-autodeploy@v1.0.0
 ```
 
 Published releases also provide macOS/Linux binary archives and `checksums.txt`; use those when Go is not installed locally and verify the archive checksum before use. Go installs use the module proxy and checksum database. The generated workflow pins the reviewed tool version. See [the release configuration](.goreleaser.yaml).
@@ -77,7 +78,7 @@ kamal-autodeploy init --activation automatic
 
 `--direct-kamal` leaves laptop wrappers untouched and invokes the installed Kamal directly with explicit config/destination arguments. For `kamal: bundler`, it uses `bundle exec kamal` and the project's lockfile; `kamal: gem` uses the pinned installed gem. Wrapper-specific environment setup or other custom behavior is not carried into direct mode: express required behavior in reviewed Kamal configuration/hooks before opting in. Omit the flag to keep the existing wrapper path and its strict routing checks.
 
-Activation and direct-init opt-in require v0.1.4 or newer (or a compatible source SHA). Explicit opt-in uses the running tool version unless `--tool-version` is supplied. New `init` configurations default to `activation: manual`. They have only `workflow_dispatch`; CI checks are still required for an explicit deployment. If required CI is still pending, manual-mode operators must dispatch again after it passes; there is no automatic follow-up run. Manual dispatch retains the existing ordered reconciliation of pending units, so it may deploy other units and prerequisites as described in the dispatch confirmation. The manual setting disables CI-triggered runs, not this explicit reconciliation.
+Activation and direct-init opt-in require v0.1.4 or newer (or a compatible source SHA). Explicit opt-in uses the running tool version unless `--tool-version` is supplied. New `init` configurations default to `activation: manual`. With v0.1.9+, they support manual deployment dispatch and read-only PR previews; CI checks are still required for an explicit deployment. If required CI is still pending, manual-mode operators must dispatch again after it passes; there is no automatic follow-up run. Manual dispatch retains the existing ordered reconciliation of pending units, so it may deploy other units and prerequisites as described in the dispatch confirmation. The manual setting disables CI-triggered runs, not this explicit reconciliation.
 
 Rediscovery preserves activation from a valid existing configuration; invalid prior configuration defaults safely to manual unless explicitly overridden. Configs from earlier versions that omit `activation` remain automatic when regenerated. Use `init --activation manual` to stop future CI-triggered runs, or `init --activation automatic` to enable them. Regenerate and commit both files together. Switching modes does not cancel runs already in progress, and automatic activation itself is an operator-reviewed change; the tool does not infer successful onboarding from an earlier health check.
 
@@ -95,7 +96,7 @@ The generated workflow has one `select` job and one deploy job per unit. Manual 
 
 1. **Trigger.** When activation is automatic, `workflow_run` after your CI workflow(s) complete, plus `workflow_dispatch`. Before checkout, the run is verified: same repository, not a fork, a `push` event, branch `main`, an expected workflow name *and* path, and a 40-character head SHA. A green pull request check never deploys.
 2. **Baseline.** For each unit, the newest GitHub Deployment (task `kamal-autodeploy`) in the unit's environment that ever reached `success`. GitHub's own environment deployments (task `deploy`) are ignored.
-3. **Candidate.** The newest commit on main's first-parent history (up to 25 back, always including the trigger) that is newer than the baseline and whose **required workflows for that unit** all succeeded for that exact SHA on a push to main. Pending, failed, cancelled, skipped or absent runs are not success. If a newer commit is still in CI, the run waits for it (its completion starts another run). Picking the newest green commit is what makes a replaced queued run safe.
+3. **Candidate.** The newest commit on main's first-parent history (up to 25 back within the inspected first-parent history) that is newer than the baseline and whose **required workflows for that unit** all succeeded for that exact SHA on a push to main. Pending, failed, cancelled, skipped or absent runs are not success. If a newer commit is still in CI, the run waits for it (its completion starts another run). Picking the newest green commit is what makes a replaced queued run safe.
 4. **Changes.** Files changed between the baseline and the candidate (`git diff --no-renames`, so a move counts for both sides). Ignore rules apply first, then the unit's `paths` and `shared` rules. Files no unit claims deploy every unit (`unclassified: deploy`, the default) or stop the run (`unclassified: stop`).
 5. **Unknown means deploy.** No successful deploy yet, a history too long to read, or a baseline commit that no longer exists (force-push) all deploy the candidate, with the reason in the job summary.
 6. **Order and locks.** Units deploy in `after` order; units that share a host (`lock`) are chained so they never run in parallel. A unit whose predecessor failed is skipped and keeps its baseline. Trusted deployment runs share one concurrency group with `cancel-in-progress: false`.
@@ -105,6 +106,50 @@ The generated workflow has one `select` job and one deploy job per unit. Manual 
 Automatic failures are not retried by another CI completion for the same unit, deploy version and observed branch head. The serialized deploy guard checks GitHub Deployment records and prints why the duplicate attempt was skipped. Push a new commit or dispatch `action=deploy` for that unit to retry. A new docs-only commit can retry an older eligible version when that unit's CI is path-filtered. Explicit manual requests remain retryable; records from older tool versions without an automatic attempt key do not suppress work. Required CI must still pass before any attempt is created.
 
 Scenarios covered by tests (`internal/selection`): first deploy, single config, destination overlays, two standalone configs with wrappers, shared host, docs-only, Rails-only, Edge-only, migration/shared paths, two rapid merges, queued-run replacement, CI failure (and skipped/cancelled CI), failed deploy then docs merge, partial success, manual deploy, rollback and hold, recovery after a failed rollback, stale runs, force-push, renames and deletes, path-filtered and absent CI, fork and pull-request runs, GitHub API errors and pagination.
+
+## Batch merges and PR previews
+
+Available with tool version v0.1.9 or newer.
+
+Add the whitespace-delimited token `[skip-deploy]` to a landed commit's subject
+or body to hold automatic deployments. Merge your first PRs with that marker,
+then merge the final PR without it. CI continues on every merge. After the final
+commit passes each unit's required CI, KAD evaluates all changes since that
+unit's last successful deployment. A pending or failed release cannot fall back
+to the marked commit or an older green commit.
+
+For PR titles or descriptions, preserve the marker in the final squash or merge
+message. Editing PR text after merge has no effect. Any subsequent unmarked
+green commit can release the batch. An explicit manual `action=deploy` overrides
+the hold for its selected unit and still requires green CI. A hold arriving
+during a queued run is checked again before Kamal starts. An active Kamal
+operation continues.
+
+Automatic candidates are restricted to the inspected first-parent history
+window. An old CI trigger outside that window cannot bypass a hold. If a guard
+cannot establish the current boundary within that window, it stops and asks for
+a fresh CI reconciliation.
+
+Generated workflows also run a PR preview with a read-only repository token.
+Its Actions job summary shows the services affected by the PR and flags shared
+or deployment configuration changes for review. The preview reads KAD rules
+from the PR base and reads changes from the merge base to the PR head. Proposed
+rule changes take effect after merge. The summary describes PR impact; actual
+deployment selection also includes outstanding changes since production's last
+successful deployment and checks the merged commit's required CI.
+
+The preview executes the pinned tool, reads Git history, and requires no
+deployment environment, SSH, registry credentials, Tailscale identity, or Upstate
+login. It also runs while deployment activation is manual. To inspect a PR
+locally with the same behavior:
+
+```sh
+kamal-autodeploy preview --base BASE_COMMIT_SHA --head PR_HEAD_SHA
+```
+
+After upgrading KAD, run `kamal-autodeploy init --tool-version v1.0.0` and
+review the generated workflow so existing repositories gain the preview job and
+the guard's dependency hold propagation.
 
 ## Configuration
 
@@ -246,3 +291,5 @@ Before the first production run:
 ### Private SSH over Tailscale
 
 Deployment and remote-doctor jobs can optionally join a tailnet with ephemeral GitHub OIDC identities, allowing public SSH to stay closed. Configure `tailscale.tags` per unit and use its Tailscale address in both Kamal and `ssh.hosts`. Dedicated SSH keys and pinned host keys remain required. See [Tailscale setup](docs/tailscale.md) for environment identities, least-privilege network policy, firewall rules and first-deployment checks (v0.1.8+).
+
+See [v1 scope and limits](docs/v1.md) before enabling automatic deployment.

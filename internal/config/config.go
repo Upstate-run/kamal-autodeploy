@@ -230,6 +230,25 @@ func SupportsActivationVersion(version string) bool {
 	return major > 0 || (major == 0 && (minor > 1 || (minor == 1 && patch >= 4)))
 }
 
+// SupportsBatchPreviewVersion gates generated commands and outputs added in v0.1.9.
+func SupportsBatchPreviewVersion(version string) bool {
+	if sourceSHAPattern.MatchString(version) {
+		return true
+	}
+	base := strings.SplitN(strings.TrimPrefix(version, "v"), "-", 2)[0]
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	major, e1 := strconv.Atoi(parts[0])
+	minor, e2 := strconv.Atoi(parts[1])
+	patch, e3 := strconv.Atoi(parts[2])
+	if major == 0 && minor == 1 && patch == 9 && strings.Contains(version, "-") {
+		return false
+	}
+	return e1 == nil && e2 == nil && e3 == nil && (major > 0 || minor > 1 || (minor == 1 && patch >= 9))
+}
+
 // TailscaleHost accepts direct tailnet peers; subnet routing and public fallback
 // are deliberately outside this transport option.
 func TailscaleHost(host string) bool {

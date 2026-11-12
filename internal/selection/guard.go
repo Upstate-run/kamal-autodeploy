@@ -14,6 +14,7 @@ var ErrPreviousAutomaticFailure = errors.New("previous automatic deployment atte
 // GuardAPI is what the deploy job's last check before Kamal needs.
 type GuardAPI interface {
 	API
+	Commit(sha string) (github.CommitMetadata, error)
 	Compare(base, head string) (string, error)
 	BranchHead(branch string) (string, error)
 	CreateDeployment(sha, environment, task string, payload github.DeploymentPayload, description string) (int64, error)
@@ -22,6 +23,7 @@ type GuardAPI interface {
 
 // GuardResult says whether the deploy job may run Kamal, and the Deployment it opened.
 type GuardResult struct {
+	Held         bool
 	Proceed      bool
 	Reason       string
 	DeploymentID int64
@@ -69,6 +71,15 @@ func Guard(api GuardAPI, cfg *config.Config, unit config.Unit, d Decision, runID
 		head, err := api.BranchHead(cfg.Branch)
 		if err != nil {
 			return GuardResult{}, err
+		}
+		if d.AutomaticHead != "" {
+			hold, err := guardHold(api, head, d.SHA)
+			if err != nil {
+				return GuardResult{}, err
+			}
+			if hold != "" {
+				return GuardResult{Held: true, Reason: "automatic deployments held by [skip-deploy] at " + short(hold)}, nil
+			}
 		}
 		rel, err := api.Compare(d.SHA, head)
 		if err != nil {
@@ -135,4 +146,21 @@ func failedAutomaticAttempt(api API, unit config.Unit, decision Decision) (bool,
 		return false, nil
 	}
 	return failed, err
+}
+
+func guardHold(api GuardAPI, head, selected string) (string, error) {
+	for i := 0; i < MaxCandidates; i++ {
+		commit, err := api.Commit(head)
+		if err != nil {
+			return "", err
+		}
+		if SkipDeploy(commit.Commit.Message) {
+			return head, nil
+		}
+		if head == selected || len(commit.Parents) == 0 {
+			return "", nil
+		}
+		head = commit.Parents[0].SHA
+	}
+	return "", errors.New("automatic selection is outside the inspected branch history; wait for a new CI run")
 }

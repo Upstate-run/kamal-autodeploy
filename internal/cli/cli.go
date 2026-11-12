@@ -51,7 +51,7 @@ Usage:
   kamal-autodeploy version
 
 Used by the generated workflow:
-  kamal-autodeploy select | guard | record
+  kamal-autodeploy select | guard | record | preview
 `
 
 type Env struct {
@@ -114,6 +114,8 @@ func Run(e *Env, args []string) error {
 		return provisionCommand(e, args[1:])
 	case "doctor":
 		return doctorCommand(e, args[1:])
+	case "preview":
+		return previewCommand(e, args[1:])
 	case "select":
 		return selectCommand(e, args[1:])
 	case "guard":

@@ -86,7 +86,7 @@ func golden(t *testing.T, path string, got []byte) {
 func TestInitSimpleSingleConfig(t *testing.T) {
 	dir := fixtureRepo(t, "simple", "git@github.com:acme/shop.git")
 	e, out := testEnv(dir)
-	if err := Run(e, []string{"init", "--yes", "--tool-version", "v0.1.4"}); err != nil {
+	if err := Run(e, []string{"init", "--yes", "--tool-version", "v1.0.0"}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	cfg, err := config.Load(filepath.Join(dir, config.FileName))
@@ -118,7 +118,7 @@ func TestInitSimpleSingleConfig(t *testing.T) {
 func TestInitTwoConfigTwoService(t *testing.T) {
 	dir := fixtureRepo(t, "two-services", "https://github.com/acme/two-services.git")
 	e, out := testEnv(dir)
-	if err := Run(e, []string{"plan", "--tool-version", "v0.1.4"}); err != nil {
+	if err := Run(e, []string{"plan", "--tool-version", "v1.0.0"}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	plan := out.String()
@@ -132,7 +132,7 @@ func TestInitTwoConfigTwoService(t *testing.T) {
 		t.Fatal("plan must not write")
 	}
 	out.Reset()
-	if err := Run(e, []string{"init", "--yes", "--tool-version", "v0.1.4"}); err != nil {
+	if err := Run(e, []string{"init", "--yes", "--tool-version", "v1.0.0"}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	cfg, err := config.Load(filepath.Join(dir, config.FileName))

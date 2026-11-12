@@ -152,6 +152,11 @@ func render(c *config.Config) string {
 	} else {
 		w.l(2, "# Manual onboarding: CI completions do not start this workflow.")
 	}
+	if config.SupportsBatchPreviewVersion(c.ToolVersion) {
+		w.l(2, "pull_request:")
+		w.l(4, "types: [opened, synchronize, reopened, edited]")
+		w.l(4, "branches: [%s]", quote(c.Branch))
+	}
 	w.l(2, "workflow_dispatch:")
 	w.l(4, "inputs:")
 	w.l(6, "action:")
@@ -185,9 +190,16 @@ func render(c *config.Config) string {
 	w.l(0, "")
 	w.l(0, "jobs:")
 
+	if config.SupportsBatchPreviewVersion(c.ToolVersion) {
+		renderPreview(w, c)
+	}
+
 	// ---- select -------------------------------------------------------------------
 	w.l(2, "select:")
 	w.l(4, "name: Select units")
+	if config.SupportsBatchPreviewVersion(c.ToolVersion) {
+		w.l(4, "if: ${{ github.event_name != 'pull_request' }}")
+	}
 	w.l(4, "runs-on: %s", Runner)
 	w.l(4, "timeout-minutes: 10")
 	w.l(4, "permissions:")
@@ -325,10 +337,18 @@ func renderUnit(w *writer, c *config.Config, u config.Unit) {
 	cond := []string{"!cancelled()", "needs.select.result == 'success'", fmt.Sprintf("needs.select.outputs.%s_action != ''", k), fmt.Sprintf("needs.select.outputs.%s_action != 'skip'", k)}
 	for _, p := range preds {
 		pk := OutputKey(p)
-		cond = append(cond, fmt.Sprintf("(needs.deploy-%s.result == 'success' || (needs.deploy-%s.result == 'skipped' && needs.select.outputs.%s_action == 'skip'))", p, p, pk))
+		if config.SupportsBatchPreviewVersion(c.ToolVersion) {
+			cond = append(cond, fmt.Sprintf("(needs.deploy-%s.result == 'success' && needs.deploy-%s.outputs.held != 'true' || (needs.deploy-%s.result == 'skipped' && needs.select.outputs.%s_action == 'skip'))", p, p, p, pk))
+		} else {
+			cond = append(cond, fmt.Sprintf("(needs.deploy-%s.result == 'success' || (needs.deploy-%s.result == 'skipped' && needs.select.outputs.%s_action == 'skip'))", p, p, pk))
+		}
 	}
 	w.l(2, "deploy-%s:", u.ID)
 	w.l(4, "name: Deploy %s", u.ID)
+	if config.SupportsBatchPreviewVersion(c.ToolVersion) {
+		w.l(4, "outputs:")
+		w.l(6, "held: ${{ steps.guard.outputs.held }}")
+	}
 	w.l(4, "needs: [%s]", strings.Join(needs, ", "))
 	w.l(4, "if: ${{ %s }}", strings.Join(cond, " && "))
 	w.l(4, "runs-on: %s", Runner)
@@ -599,4 +619,31 @@ func KamalSecretFileVariables(u config.Unit) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// PRs receive a read-only token and never enter deployment environments. The tool
+// comes from the configured release, while the CLI loads rules from the PR base.
+func renderPreview(w *writer, c *config.Config) {
+	w.l(2, "preview:")
+	w.l(4, "name: PR deploy preview")
+	w.l(4, "if: ${{ github.event_name == 'pull_request' }}")
+	w.l(4, "runs-on: %s", Runner)
+	w.l(4, "timeout-minutes: 10")
+	w.l(4, "permissions:")
+	w.l(6, "contents: read")
+	w.l(4, "steps:")
+	w.l(6, "- name: Read PR history")
+	w.l(8, "uses: %s", CheckoutAction)
+	w.l(8, "with:")
+	w.l(10, "fetch-depth: 0")
+	w.l(10, "persist-credentials: false")
+	installTool(w, c)
+	w.l(6, "- name: Preview changes using base branch rules")
+	w.l(8, "env:")
+	w.l(10, "PR_BASE: ${{ github.event.pull_request.base.sha }}")
+	w.l(10, "PR_HEAD: ${{ github.event.pull_request.head.sha }}")
+	w.l(10, "PR_TITLE: ${{ github.event.pull_request.title }}")
+	w.l(10, "PR_BODY: ${{ github.event.pull_request.body }}")
+	w.l(8, `run: kamal-autodeploy preview --base "$PR_BASE" --head "$PR_HEAD"`)
+	w.l(0, "")
 }

@@ -269,3 +269,19 @@ func TestTailscaleRejectsPublicAndLocalTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestBatchPreviewVersionBoundary(t *testing.T) {
+	for version, want := range map[string]bool{
+		"v0.1.8":                                false,
+		"v0.1.9-0.20261110120000-abcdefabcdef":  false,
+		"v0.1.9-rc.1":                           false,
+		"v0.1.9":                                true,
+		"v0.1.10-0.20261111120000-abcdefabcdef": true,
+		"v0.2.0":                                true,
+		"bad-version":                           false,
+	} {
+		if got := SupportsBatchPreviewVersion(version); got != want {
+			t.Errorf("%s: got %v, want %v", version, got, want)
+		}
+	}
+}

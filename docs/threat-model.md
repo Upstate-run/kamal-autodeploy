@@ -75,3 +75,25 @@ case-insensitively. A failed recovery deploy never clears a failed-rollback hold
 A unit may opt into a pinned Tailscale action using GitHub OIDC. KAD exchanges identity tokens via HTTPS for a five-minute single-use ephemeral node key and gives the action only a mode-0600 temporary key-file reference. No credential values enter argv or diagnostic output; cleanup deletes the file and the action logs out. Provider bodies/transport details are withheld on errors. Only that unit job gets `id-token: write`; environment-scoped client ID/audience select a federated identity restricted by exact repository/environment subject and runner tag. Main-only environment protection remains required because environment OIDC subjects do not include a branch. The network connection is mandatory and runs after the existing selection/guard, for doctor as well as deployment. SSH authorization and host-key verification remain independent requirements. Tailnet grants must restrict the runner tag to the target SSH port; additive allow-all policy can defeat that restriction. This integration does not enable Tailscale SSH, modify server/provider firewalls, or provision tailnet access policy.
 
 The trusted generated workflow passes `--require-tailscale` to selected-checkout verification. It checks discovered Kamal targets (including destination overlays), not just the current reviewed plan: retained public host pins cannot authorize public fallback from an older checkout.
+
+## PR preview
+
+The generated PR job uses `pull_request`, reads configuration from the event's
+base SHA, and compares Git trees. It installs a pinned released tool and executes
+no checked-out project scripts. It has only `contents: read`, no environment,
+and no deployment or OIDC permissions. PR titles and bodies are passed through
+environment variables, never interpolated into shell commands. Paths rendered
+in the job summary are HTML-escaped.
+
+The deployment selector is gated out of PR events. The base workflow's existing
+review and branch protection boundary still applies to changes to workflow YAML.
+
+## Automatic deployment holds
+
+The marker is immutable commit metadata on the deploy branch's first-parent
+history. Selection excludes the marker and all older candidates, while preserving
+the deployment baseline. The serialized guard checks current remote commit
+metadata again before creating a Deployment. A held predecessor exposes its hold
+to dependent jobs so success of the guard step cannot authorize their rollout.
+Manual deploy remains an explicit CI-gated override. A hold cannot stop an
+already-started Kamal operation.

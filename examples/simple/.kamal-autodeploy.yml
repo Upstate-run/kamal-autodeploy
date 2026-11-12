@@ -4,7 +4,7 @@
 activation: manual
 version: 1
 branch: main
-tool_version: v0.1.4
+tool_version: v1.0.0
 ci:
     - name: CI
       path: .github/workflows/ci.yml

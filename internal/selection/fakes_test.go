@@ -23,14 +23,15 @@ const testRepo = "acme/shop"
 // ---- fake git ------------------------------------------------------------------
 
 type fakeRepo struct {
-	parents map[string][]string
-	trees   map[string]map[string]string
-	branch  []string // first-parent chain of the branch, oldest first
-	missing map[string]bool
+	parents  map[string][]string
+	trees    map[string]map[string]string
+	branch   []string // first-parent chain of the branch, oldest first
+	messages map[string]string
+	missing  map[string]bool
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{parents: map[string][]string{}, trees: map[string]map[string]string{}, missing: map[string]bool{}}
+	return &fakeRepo{messages: map[string]string{}, parents: map[string][]string{}, trees: map[string]map[string]string{}, missing: map[string]bool{}}
 }
 
 func shaOf(s string) string { h := sha1.Sum([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -38,6 +39,7 @@ func shaOf(s string) string { h := sha1.Sum([]byte(s)); return hex.EncodeToStrin
 // commit adds a commit on top of parent with the given file edits ("" content deletes).
 func (r *fakeRepo) commit(label, parent string, edits map[string]string) string {
 	sha := shaOf(label)
+	r.messages[sha] = label
 	tree := map[string]string{}
 	if parent != "" {
 		for k, v := range r.trees[parent] {
@@ -111,6 +113,8 @@ func (r *fakeRepo) FirstParents(ref string, n int) ([]string, error) {
 	}
 	return out, nil
 }
+
+func (r *fakeRepo) CommitMessage(sha string) (string, error) { return r.messages[sha], nil }
 
 func (r *fakeRepo) Head() (string, error) { return r.head(), nil }
 
@@ -270,6 +274,13 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			status = "behind"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
+	case r.Method == "GET" && strings.HasPrefix(p, "/commits/") && p != "/commits/main":
+		sha := strings.TrimPrefix(p, "/commits/")
+		parents := []map[string]string{}
+		for _, parent := range f.repo.parents[sha] {
+			parents = append(parents, map[string]string{"sha": parent})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"sha": sha, "commit": map[string]string{"message": f.repo.messages[sha]}, "parents": parents})
 	case r.Method == "GET" && p == "/commits/main":
 		_ = json.NewEncoder(w).Encode(map[string]string{"sha": f.repo.head()})
 	default:

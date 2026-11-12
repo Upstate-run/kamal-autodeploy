@@ -1,5 +1,4 @@
-# Release configuration (not run yet; nothing is published from this PR).
-# A release: tag vX.Y.Z on main, then `goreleaser release --clean` from a clean checkout.
+# Invoked only by the private designated publication script from sanitized source.
 version: 2
 project_name: kamal-autodeploy
 builds:
@@ -16,7 +15,14 @@ builds:
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files: [LICENSE, README.md]
+    # Keep source-file archive metadata stable when resuming from a fresh export.
+    files:
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
 checksum:
   name_template: checksums.txt
   algorithm: sha256

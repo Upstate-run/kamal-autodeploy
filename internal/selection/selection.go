@@ -8,7 +8,7 @@
 //  1. A rollback that did not succeed is the newest attempt: stop, needs a person.
 //  2. The newest successful deploy is a rollback: the unit is held until a manual deploy.
 //  3. Pick the newest commit on the branch's first-parent chain (at most MaxCandidates,
-//     always including the trigger) that is newer than the baseline and whose required
+//     limited to the inspected history) that is newer than the baseline and whose required
 //     CI workflows all succeeded. Pending, failed, skipped or absent CI is never success.
 //  4. No baseline, an unreadable history or a baseline commit missing from the
 //     repository: deploy (never skip on unknown).
@@ -257,6 +257,12 @@ func Select(in Input, api API, repo gitx.Repo) ([]Decision, error) {
 	if err != nil || !onBranch {
 		return nil, fmt.Errorf("commit %s is not on %s; refusing to deploy it", short(in.TriggerSHA), in.Config.Branch)
 	}
+	// Automatic candidates stay in the inspected first-parent window. Appending
+	// an older trigger could cross a hold outside that window.
+	automaticCandidates, hold, err := automaticCandidates(repo, candidates)
+	if err != nil {
+		return nil, err
+	}
 	if !containsStr(candidates, in.TriggerSHA) {
 		candidates = append(candidates, in.TriggerSHA)
 	}
@@ -266,10 +272,10 @@ func Select(in Input, api API, repo gitx.Repo) ([]Decision, error) {
 		var d Decision
 		switch in.Event {
 		case "workflow_run":
-			d, err = automatic(in, unit, api, repo, ci, candidates)
+			d, err = automatic(in, unit, api, repo, ci, automaticCandidates, head, hold)
 		case "workflow_dispatch":
 			if unit.ID != in.Unit && in.Action != ActionDoctor {
-				d, err = automatic(in, unit, api, repo, ci, candidates)
+				d, err = automatic(in, unit, api, repo, ci, automaticCandidates, head, hold)
 			} else {
 				d, err = dispatch(in, unit, api, ci, candidates, head)
 			}
@@ -284,8 +290,8 @@ func Select(in Input, api API, repo gitx.Repo) ([]Decision, error) {
 	return out, nil
 }
 
-func automatic(in Input, unit config.Unit, api API, repo gitx.Repo, ci *ciCache, candidates []string) (Decision, error) {
-	d := Decision{Unit: unit.ID, Action: ActionSkip, AutomaticHead: candidates[0]}
+func automatic(in Input, unit config.Unit, api API, repo gitx.Repo, ci *ciCache, candidates []string, head, hold string) (Decision, error) {
+	d := Decision{Unit: unit.ID, Action: ActionSkip, AutomaticHead: head}
 	if !in.Config.Automatic() {
 		if in.Event == "workflow_run" {
 			d.Reason = "automatic deployment is disabled (activation: manual)"
@@ -307,6 +313,10 @@ func automatic(in Input, unit config.Unit, api API, repo gitx.Repo, ci *ciCache,
 	}
 	if st.BaselineKind == ActionRollback {
 		d.Reason = fmt.Sprintf("held at rollback version %s; automatic deploys resume after a manual deploy (action=deploy)", st.BaselineVersion)
+		return d, nil
+	}
+	if len(candidates) == 0 && hold != "" {
+		d.Reason = "automatic deployments held by [skip-deploy] at " + short(hold)
 		return d, nil
 	}
 	baselineKnown := st.Baseline != "" && !st.Unknown && repo.HasCommit(st.Baseline)
@@ -379,6 +389,8 @@ func automatic(in Input, unit config.Unit, api API, repo gitx.Repo, ci *ciCache,
 			d.Reason = "required workflow " + absentDetail + " did not run for " + short(absent)
 		case len(failed) > 0:
 			d.Reason = "no newer commit passed CI (" + strings.Join(failed, ", ") + ")"
+		case hold != "":
+			d.Reason = "automatic deployments held by [skip-deploy] at " + short(hold) + "; waiting for a newer commit with passing CI"
 		case st.Baseline == "":
 			d.Reason = "no commit with passing CI yet"
 		default:
